@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://unpkg.com; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' https://unpkg.com; connect-src 'self' https://unpkg.com; media-src 'self' data: blob:; font-src 'self';" />
+    <title>BetasprayGame1.0</title>
+    <style>
+      html, body, #app { height: 100%; margin: 0; }
+      body { background: #0a0f1a; }
+      #mobile-controls { position: fixed; inset: auto 0 0 0; display: flex; justify-content: space-between; padding: env(safe-area-inset-bottom) 12px 12px 12px; pointer-events: none; }
+      .btn { pointer-events: auto; flex: 1; margin: 0 8px; height: 64px; border-radius: 12px; border: 2px solid #fff3; background: #ffffff14; color: #fff; font: 600 18px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; backdrop-filter: blur(6px); }
+      .btn:active { background: #ffffff22; }
+      @media (min-width: 900px) { #mobile-controls { display: none; } }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="mobile-controls" aria-hidden="false" role="group" aria-label="Climb controls">
+      <button id="btn-left" class="btn" aria-label="Move left">⬅️ Left</button>
+      <button id="btn-right" class="btn" aria-label="Move right">Right ➡️</button>
+    </div>
+
+    <script type="module">
+      import kaboom from 'https://unpkg.com/kaboom/dist/kaboom.mjs';
+
+      const GAME_CONFIG = {
+        internalWidth: 540,
+        internalHeight: 960,
+        physicsTimestepMs: 16.6667,
+        maxDtSeconds: 0.05,
+        inputLockMs: 120,
+        uiScale: 1.25,
+        timeBar: { maxSeconds: 6, refillOnStepSeconds: 0.4, dangerThreshold: 0.15 },
+        wall: { width: 160 },
+      };
+
+      function initKaboom() {
+        const k = kaboom({
+          width: GAME_CONFIG.internalWidth,
+          height: GAME_CONFIG.internalHeight,
+          background: [196, 244, 248],
+          global: false,
+          touchToMouse: true,
+          debug: true,
+          stretch: true,
+          letterbox: true,
+          crisp: true,
+          pixelDensity: Math.max(1, Math.floor(window.devicePixelRatio || 1)),
+          root: document.querySelector('#app'),
+        });
+        return { k };
+      }
+
+      // Simple input wiring (keyboard + mobile buttons)
+      function setupInput(k, cbs) {
+        const onLeft = () => cbs.onMove('left');
+        const onRight = () => cbs.onMove('right');
+        const onStart = () => cbs.onStart();
+        const off = [];
+        ['a', 'left'].forEach((key) => off.push(k.onKeyPress(key, onLeft)));
+        ['d', 'right'].forEach((key) => off.push(k.onKeyPress(key, onRight)));
+        ['space', 'enter'].forEach((key) => off.push(k.onKeyPress(key, onStart)));
+        const btnLeft = document.getElementById('btn-left');
+        const btnRight = document.getElementById('btn-right');
+        const add = (el, fn) => { if (!el) return () => {}; const h = (e) => { e.preventDefault(); fn(); }; el.addEventListener('pointerdown', h); return () => el.removeEventListener('pointerdown', h); };
+        const a = add(btnLeft, onLeft); const b = add(btnRight, onRight);
+        return () => { off.forEach((s) => s.cancel()); a(); b(); };
+      }
+
+      // Background with mountains, trees, and shrubs framing the wall
+      function spawnBackground(k, viewSize, opts) {
+        const mountains = []; const clouds = []; const trees = []; const shrubs = [];
+        const rand = (min, max) => Math.random() * (max - min) + min;
+
+        const addTriangleRange = (count, baseY, color, zBase, minH, maxH, minW, maxW) => {
+          const [r,g,b] = color;
+          for (let i=0;i<count;i++) {
+            const t = (i + 0.5) / count;
+            const x = t * viewSize.x + rand(-viewSize.x * 0.06, viewSize.x * 0.06);
+            const height = rand(minH, maxH);
+            const width = rand(minW, maxW);
+            const stripes = Math.max(8, Math.ceil(height / 6));
+            const roundnessExp = 0.65;
+            const stripeH = Math.ceil(height / stripes) + 1;
+            for (let s = 0; s < stripes; s++) {
+              const frac = (s + 1) / stripes;
+              let w = width * Math.pow(frac, roundnessExp);
+              w += Math.sin(frac * Math.PI) * width * 0.03;
+              w = Math.max(4, w);
+              k.add([k.rect(w, stripeH), k.pos(x, baseY - height + s * stripeH), k.anchor('bot'), k.color(r,g,b), { z: zBase - i * 0.01 }]);
+            }
+          }
+        };
+        addTriangleRange(7, viewSize.y * 0.86, [140,220,190], -30, viewSize.y * 0.20, viewSize.y * 0.34, viewSize.x * 0.22, viewSize.x * 0.44);
+        addTriangleRange(6, viewSize.y * 0.92, [120,205,175], -28, viewSize.y * 0.24, viewSize.y * 0.38, viewSize.x * 0.24, viewSize.x * 0.48);
+        addTriangleRange(5, viewSize.y * 0.97, [100,190,160], -26, viewSize.y * 0.26, viewSize.y * 0.42, viewSize.x * 0.26, viewSize.x * 0.52);
+
+        // Clouds
+        for (let i=0;i<6;i++) {
+          const width = rand(viewSize.x * 0.2, viewSize.x * 0.35);
+          const c = k.add([k.rect(width, width*0.3, { radius: width*0.15 }), k.pos(rand(0, viewSize.x), rand(20, viewSize.y*0.6)), k.color(255,255,255), k.opacity(0.25), { z: -20, speed: rand(5,15) }]);
+          clouds.push(c);
+        }
+
+        // Ground and trees
+        const treeBaseY = viewSize.y * 0.88;
+        k.add([k.rect(viewSize.x, Math.max(10, viewSize.y - treeBaseY + 8), { radius: 6 }), k.pos(0, viewSize.y), k.anchor('botleft'), k.color(74,52,43), { z: -2 }]);
+        const clip = opts && opts.treeClip; const minX = clip ? clip.centerX - clip.width/2 : 0; const maxX = clip ? clip.centerX + clip.width/2 : viewSize.x;
+        const addTree = (x, scale) => {
+          const trunk = k.add([k.rect(5*scale, 18*scale, { radius: 2 }), k.pos(x, treeBaseY), k.anchor('bot'), k.color(84,60,44), { z: -1.5 }]);
+          const stripes = 5;
+          for (let s=0;s<stripes;s++) {
+            const frac = (s+1)/stripes; const w = 26*scale*frac; const h = 6*scale; const y = treeBaseY - 18*scale - s*h + 2*scale;
+            trees.push(k.add([k.rect(w,h, { radius: 3 }), k.pos(x,y), k.anchor('center'), k.color(40 + s*4, 120 + s*3, 80), { z: -1.45 }]));
+          }
+          trees.push(trunk);
+        };
+        for (let i=0;i<8;i++) addTree(rand(minX+10, maxX-10), rand(0.8,1.2));
+        const addCluster = (range, count) => {
+          if (!range || range.max - range.min < 10) return;
+          for (let i=0;i<count;i++) { const x = rand(range.min, range.max); const sc = rand(0.9, 1.5); addTree(x, sc);
+            if (Math.random() < 0.7) { const w = rand(12,26)*(sc*0.6), h = rand(6,10)*(sc*0.5); shrubs.push(k.add([k.rect(w,h,{radius:4}), k.pos(x+rand(-8,8), treeBaseY-2), k.anchor('bot'), k.color(66,120,72), k.opacity(0.9), { z: -1.48 }])); }
+          }
+        };
+        addCluster({ min: 10, max: Math.max(20, minX-10) }, 8);
+        addCluster({ min: Math.min(viewSize.x-20, maxX+10), max: viewSize.x-10 }, 8);
+
+        k.onUpdate(() => { for (const c of clouds) { const s = c.speed ?? 10; c.move(s,0); const pos = c.pos; const width = c.width; if (pos.x - width/2 > viewSize.x + 10) { c.pos.x = -10 - width/2; c.pos.y = rand(20, viewSize.y*0.6);} } });
+        return { mountains, clouds, trees, shrubs };
+      }
+
+      // Rock wall bands
+      function spawnRockWall(k, centerX, viewH, width, bandH) {
+        const baseColor = k.rgb(110,104,96);
+        const bandCount = Math.ceil(viewH / bandH) + 4;
+        const leftOffsets = []; const rightOffsets = []; let curL=0, curR=0; const maxJitter = width*0.12;
+        for (let i=0;i<bandCount;i++){ curL += (Math.random()-0.5)*(width*0.06); curR += (Math.random()-0.5)*(width*0.06); curL = Math.max(-maxJitter, Math.min(maxJitter, curL)); curR = Math.max(-maxJitter, Math.min(maxJitter, curR)); leftOffsets.push(curL); rightOffsets.push(curR); }
+        const edgesAt = (y) => { const idx = Math.max(0, Math.min(bandCount-1, Math.floor(y / bandH))); const lOff = leftOffsets[idx] ?? 0; const rOff = rightOffsets[idx] ?? 0; return { left: centerX - width/2 + lOff, right: centerX + width/2 + rOff }; };
+        const laneXAt = (y, side) => { const {left,right} = edgesAt(y); const w = right - left; const margin = w * 0.25; return side === 'left' ? left + margin : right - margin; };
+        const bands = []; const root = k.add([k.pos(0,0)]);
+        for (let i=0;i<bandCount;i++){ const yMid = -bandH/2 + i*bandH; const { left, right } = edgesAt(yMid); const w = right - left; const o = root.add([k.rect(w, bandH + 4), k.pos((left+right)/2, yMid), k.anchor('center'), k.color(baseColor), k.z(0)]); bands.push(o); }
+        function spawnTopBand(){ const topL = leftOffsets[0] ?? 0; const topR = rightOffsets[0] ?? 0; let nextL = topL + (Math.random()-0.5)*(width*0.06); let nextR = topR + (Math.random()-0.5)*(width*0.06); const clip = (v)=>Math.max(-maxJitter, Math.min(maxJitter, v)); nextL=clip(nextL); nextR=clip(nextR); leftOffsets.unshift(nextL); rightOffsets.unshift(nextR); leftOffsets.pop(); rightOffsets.pop(); const yMid = (bands[0]?.pos.y ?? -bandH/2) - bandH; const {left,right} = edgesAt(0); const w = right - left; const o = root.add([k.rect(w, bandH + 4), k.pos((left+right)/2, yMid), k.anchor('center'), k.color(baseColor), k.z(0)]); bands.unshift(o); const last = bands.pop(); last?.destroy(); }
+        function scrollOnce(duration){ return new Promise((resolve)=>{ const startY = root.pos.y; k.tween(startY, startY + bandH, duration, (v)=> (root.pos.y = v), k.easings.linear).then?.(()=>{ root.pos.y = 0; for (const b of bands) b.pos.y += bandH; spawnTopBand(); resolve(); }); }); }
+        return { root, laneXAt, edgesAt, scrollOnce };
+      }
+
+      // Climber (simple segmented) with extra-long rope
+      function spawnClimber(k, wallCenterX, baseY, modelScale=1) {
+        const s = modelScale; const laneOffset = GAME_CONFIG.wall.width * 0.25; const leftX = wallCenterX - laneOffset; const rightX = wallCenterX + laneOffset;
+        const root = k.add([k.pos(leftX, baseY), k.anchor('center'), k.z(10)]);
+        const shirt = k.rgb(28,120,200), skin = k.rgb(250,215,170), hairC = k.rgb(60,40,30), pants = k.rgb(170,120,40), shoe = k.rgb(22,26,30), beltC = k.rgb(200,80,40), ropeC = k.rgb(230,110,40);
+        const bodyW = 24*s, bodyH = 30*s;
+        const body = k.add([k.rect(bodyW, bodyH, { radius: 2*s }), k.pos(0,0), k.color(shirt), k.anchor('center'), k.z(11)]);
+        const neck = k.add([k.rect(8*s, 4*s, { radius: 1*s }), k.pos(0, -(bodyH/2 + 6*s)), k.anchor('center'), k.color(skin), k.z(12)]);
+        const head = k.add([k.rect(14*s, 14*s, { radius: 1*s }), k.pos(0, -(bodyH/2 + 14*s)), k.anchor('center'), k.color(skin), k.z(13)]);
+        const hair = k.add([k.rect(16*s, 16*s), k.pos(-2*s, -(bodyH/2 + 16*s)), k.anchor('center'), k.color(hairC), k.z(12)]);
+        const belt = k.add([k.rect(bodyW, 5*s, { radius: 1*s }), k.pos(0, bodyH/2 - 7*s), k.anchor('center'), k.color(beltC), k.z(12)]);
+        const legLeft = k.add([k.rect(10*s, 28*s, { radius: 1*s }), k.pos(-7*s, bodyH/2), k.anchor('top'), k.color(pants), k.z(10)]);
+        const legRight = k.add([k.rect(10*s, 28*s, { radius: 1*s }), k.pos(7*s, bodyH/2), k.anchor('top'), k.color(pants), k.z(10)]);
+        const footLeft = k.add([k.rect(10*s, 6*s, { radius: 1*s }), k.pos(-7*s, bodyH/2 + 28*s), k.anchor('top'), k.color(shoe), k.z(10)]);
+        const footRight = k.add([k.rect(10*s, 6*s, { radius: 1*s }), k.pos(7*s, bodyH/2 + 28*s), k.anchor('top'), k.color(shoe), k.z(10)]);
+        const armLeft = k.add([k.rect(6*s, 28*s, { radius: 1*s }), k.pos(-12*s, -(bodyH/2)), k.anchor('bot'), k.color(skin), k.z(12)]);
+        const armRight = k.add([k.rect(6*s, 28*s, { radius: 1*s }), k.pos(12*s, -(bodyH/2)), k.anchor('bot'), k.color(skin), k.z(12)]);
+        const rope = k.add([k.rect(2*s, Math.max(80*s, k.height()*2)), k.pos(0, -36*s), k.anchor('top'), k.color(ropeC), k.z(9)]);
+
+        const c = { root, body, head, hair, neck, belt, legLeft, legRight, footLeft, footRight, armLeft, armRight, rope, side: 'left', jitterTime: 0, leftX, rightX, baseY, armReachLeft: 0, armReachRight: 0, headRadius: 8*s, scale: s };
+
+        k.onUpdate(() => {
+          const t = k.time();
+          const sway = Math.sin(t * 2) * 1.3; body.angle = sway; rope.angle = sway * 0.6;
+          const breathe = Math.sin(Math.PI * t); const breathOffset = breathe * 2; const headTilt = Math.sin(t*2.6)*3; const headSwayX = Math.sin(t*1.8)*1.2;
+          c.jitterTime += k.dt(); const rp = c.root.pos;
+          body.pos = k.vec2(rp.x, rp.y + breathOffset);
+          neck.pos = k.vec2(rp.x, rp.y + breathOffset - (bodyH/2 + 6*s));
+          head.pos = k.vec2(rp.x + headSwayX, rp.y + breathOffset - (bodyH/2 + 14*s)); head.angle = headTilt;
+          hair.pos = k.vec2(rp.x - 2*s + headSwayX*0.6, rp.y + breathOffset - (bodyH/2 + 16*s)); hair.angle = headTilt*0.9;
+          belt.pos = k.vec2(rp.x, rp.y + breathOffset + bodyH/2 - 7*s);
+          legLeft.pos = k.vec2(rp.x - 7*s, rp.y + bodyH/2); legRight.pos = k.vec2(rp.x + 7*s, rp.y + bodyH/2);
+          footLeft.pos = k.vec2(rp.x - 7*s, rp.y + bodyH/2 + 28*s); footRight.pos = k.vec2(rp.x + 7*s, rp.y + bodyH/2 + 28*s);
+          rope.pos = k.vec2(rp.x, rp.y + breathOffset*0.5 - 36*s); rope.height = Math.max(rope.height ?? 0, k.height()*2);
+        });
+        return c;
+      }
+
+      function defineMenuScene(k) {
+        k.scene('menu', () => {
+          const viewW = k.width(); const viewH = k.height(); const wallCenterX = viewW/2;
+          spawnBackground(k, k.vec2(viewW, viewH), { treeClip: { centerX: wallCenterX, width: GAME_CONFIG.wall.width } });
+          const bandH = Math.floor(viewH/7); spawnRockWall(k, wallCenterX, viewH, GAME_CONFIG.wall.width, bandH);
+
+          const baseScale = 1.8 * 1.10; const startScale = baseScale * 1.3; const s = startScale; const bodyH = 30*s;
+          const footStack = bodyH/2 + 34*s; const platformTopY = viewH - 110; const heroBaseY = platformTopY - footStack;
+          const hero = spawnClimber(k, wallCenterX, heroBaseY, startScale); try{ hero.hair.z = 12; }catch{}
+
+          // Idle actions
+          let isActing = false; let cooldown = 1.5 + Math.random()*1.5; const scheduleNext = () => cooldown = 2 + Math.random()*3;
+          const easings = k.easings;
+          const neutralPose = () => { const rp = hero.root.pos; const armsBaseY = rp.y - bodyH/2 + 4*s; hero.armLeft.pos = k.vec2(rp.x - 11*s, armsBaseY); hero.armRight.pos = k.vec2(rp.x + 11*s, armsBaseY); hero.armLeft.angle = 190; hero.armRight.angle = 170; hero.head.angle = 0; hero.hair.angle = 0; hero.body.angle = 0; };
+          function waveOnce(side){ isActing = true; const arm = side==='left'? hero.armLeft: hero.armRight; const rp = hero.root.pos; const yBase = rp.y - bodyH/2 + 4*s; const xOff = side==='left'? -11*s : 11*s; const raiseA = side==='left'? -20:20; const highA = side==='left'? -50:50; (side==='left'? hero.armLeft: hero.armRight).pos = k.vec2(rp.x + xOff, yBase - 6*s); const fromA = arm.angle ?? (side==='left'?190:170); k.tween(fromA, raiseA, 0.18, v=> arm.angle=v, easings.easeOutCubic).then?.(()=>{ k.tween(arm.angle??raiseA, highA, 0.16, v=> arm.angle=v, easings.easeInOutSine).then?.(()=>{ k.tween(arm.angle??highA, raiseA, 0.16, v=> arm.angle=v, easings.easeInOutSine).then?.(()=>{ k.tween(arm.angle??raiseA, side==='left'?190:170, 0.18, v=> arm.angle=v, easings.easeInCubic).then?.(()=>{ isActing=false; scheduleNext(); }); }); }); }); }
+          function stepSide(dir){ isActing = true; const x0=hero.root.pos.x; const x1=x0 + dir*18*s; const half=0.34; k.tween(x0, x1, half, v=> hero.root.pos.x=v, easings.easeInOutSine).then?.(()=>{ k.tween(x1, x0, half, v=> hero.root.pos.x=v, easings.easeInOutSine).then?.(()=>{ isActing=false; scheduleNext(); }); }); const angL0 = hero.legLeft.angle ?? 0; const angR0 = hero.legRight.angle ?? 0; const swing = 12*dir; const swingBack = -12*dir; k.tween(angL0, swing, half, v=> hero.legLeft.angle=v, easings.easeInOutSine).then?.(()=> k.tween(hero.legLeft.angle ?? swing, 0, half, v=> hero.legLeft.angle=v, easings.easeInOutSine)); k.tween(angR0, swingBack, half, v=> hero.legRight.angle=v, easings.easeInOutSine).then?.(()=> k.tween(hero.legRight.angle ?? swingBack, 0, half, v=> hero.legRight.angle=v, easings.easeInOutSine)); }
+          function adjustLegs(){ isActing = true; const l0=hero.legLeft.angle ?? 0; const r0=hero.legRight.angle ?? 0; k.tween(l0, l0+8, 0.18, v=> hero.legLeft.angle=v, easings.easeOutSine).then?.(()=> k.tween(hero.legLeft.angle ?? 0, 0, 0.22, v=> hero.legLeft.angle=v, easings.easeInOutSine)); k.tween(r0, r0-8, 0.18, v=> hero.legRight.angle=v, easings.easeOutSine).then?.(()=> k.tween(hero.legRight.angle ?? 0, 0, 0.22, v=> hero.legRight.angle=v, easings.easeInOutSine).then?.(()=>{ isActing=false; scheduleNext(); })); }
+          function maybeDoIdleAction(dt){ if(isActing) return; cooldown -= dt; if(cooldown>0) return; const r=Math.random(); if(r<0.44) waveOnce(Math.random()<0.5?'right':'left'); else if(r<0.76) stepSide(Math.random()<0.5?-1:1); else adjustLegs(); }
+          k.onUpdate(()=>{ if(!isActing) neutralPose(); maybeDoIdleAction(k.dt()); const rp = hero.root.pos; const legTopL = { x: rp.x - 7*s, y: rp.y + bodyH/2 }; const legTopR = { x: rp.x + 7*s, y: rp.y + bodyH/2 }; const len = 28*s; const rad=(d)=>d*Math.PI/180; const aL=hero.legLeft.angle ?? 0; const aR=hero.legRight.angle ?? 0; hero.footLeft.pos = k.vec2(legTopL.x + Math.sin(rad(aL))*len, legTopL.y + Math.cos(rad(aL))*len); hero.footRight.pos = k.vec2(legTopR.x + Math.sin(rad(aR))*len, legTopR.y + Math.cos(rad(aR))*len); hero.footLeft.angle = aL; hero.footRight.angle = aR; });
+
+          // Rock platform
+          const platformZ = 4.5; const ledgeWidth = Math.min(viewW*0.72, 420); const ledgeHeight = Math.max(30, Math.floor(viewH*0.08)); const ledgeY = platformTopY + ledgeHeight/2;
+          k.add([k.rect(ledgeWidth, ledgeHeight, { radius: 10 }), k.pos(viewW/2, ledgeY), k.anchor('center'), k.color(88,72,64), { z: platformZ }]);
+          k.add([k.rect(ledgeWidth*0.75, ledgeHeight*0.7, { radius: 10 }), k.pos(viewW/2 - ledgeWidth*0.12, ledgeY + ledgeHeight*0.08), k.anchor('center'), k.color(74,60,54), { z: platformZ + 0.01 }]);
+          k.add([k.rect(ledgeWidth*0.46, ledgeHeight*0.5, { radius: 8 }), k.pos(viewW/2 + ledgeWidth*0.08, ledgeY + ledgeHeight*0.25), k.anchor('center'), k.color(64,50,45), { z: platformZ + 0.02 }]);
+
+          // Face
+          const eyeCol = k.rgb(30,30,30); const eyeSize = 3*s; hero.head.add([k.rect(eyeSize, eyeSize, { radius: 1*s }), k.pos(-3*s, -2*s), k.anchor('center'), k.color(eyeCol), k.z(13.5)]); hero.head.add([k.rect(eyeSize, eyeSize, { radius: 1*s }), k.pos(3*s, -2*s), k.anchor('center'), k.color(eyeCol), k.z(13.5)]); hero.head.add([k.rect(7*s, 2*s, { radius: 1*s }), k.pos(0, 4*s), k.anchor('center'), k.color(60,40,40), k.z(13.6)]);
+
+          // Title: wavy "betaspray"
+          const titleStr = 'betaspray'; const baseY = viewH * 0.18; const size = Math.round(64 * (GAME_CONFIG.uiScale ?? 1)); const letterSpacing = Math.round(size*0.12); const blue = k.rgb(28,120,200);
+          const letters=[]; const addOutlinedLetter=(ch)=>{ const root=k.add([k.pos(0,0), k.anchor('center'), { z: 2001 }]); const offs=[[-2,0],[2,0],[0,-2],[0,2],[-2,-2],[2,-2],[-2,2],[2,2]]; offs.forEach(([ox,oy])=> root.add([k.text(ch,{size}), k.pos(ox,oy), k.anchor('center'), k.color(255,255,255)])); const main=root.add([k.text(ch,{size}), k.anchor('center'), k.color(blue)]); return { root, main }; };
+          let totalW=0; const advances=[]; for (const ch of titleStr){ const l=addOutlinedLetter(ch); letters.push(l); const w=(l.main.width ?? size*0.6); const adv=w + letterSpacing; advances.push(adv); totalW += adv; } const startX = viewW/2 - totalW/2; let x = startX; letters.forEach((l,i)=>{ const adv=advances[i]; l.root.pos = k.vec2(x + adv/2, baseY); x += adv; });
+          k.onUpdate(()=>{ const t=k.time(); letters.forEach((l,i)=>{ l.root.pos.y = baseY + Math.sin(t*3 + i*0.5) * (size*0.08); }); });
+
+          // Hint panel
+          k.add([k.rect(viewW*0.92, 66, { radius: 20 }), k.pos(viewW/2, viewH - 36), k.anchor('center'), k.color(60,50,46), k.opacity(0.95), k.z(1999)]);
+          k.add([k.text('Tap Space/Enter to Start', { size: 28, width: viewW - 40, align: 'center' }), k.pos(viewW/2, viewH - 40), k.anchor('center'), k.color(255,255,255), k.z(2000)]);
+
+          function playWithExitAnim(){ if (playWithExitAnim._running) return; playWithExitAnim._running = true; let isActingLocal=true; const eas=easings; const rp=hero.root.pos; const x0=rp.x, x1=wallCenterX; const duration=1.0; k.tween(hero.body.angle ?? 0, 8, duration*0.5, v=> hero.body.angle=v, eas.easeInOutSine); k.tween(hero.armLeft.angle ?? 190, 210, duration*0.5, v=> hero.armLeft.angle=v, eas.easeInOutSine); k.tween(hero.armRight.angle ?? 170, 150, duration*0.5, v=> hero.armRight.angle=v, eas.easeInOutSine); const stepCycles=2; const half=duration/(stepCycles*2); const walkOne=(dir, next)=>{ k.tween(hero.root.pos.x, hero.root.pos.x + dir*6*s, half, v=> hero.root.pos.x=v, eas.easeInOutSine).then?.(()=> k.tween(hero.root.pos.x, hero.root.pos.x - dir*6*s, half, v=> hero.root.pos.x=v, eas.easeInOutSine).then?.(()=> next&&next())); k.tween(hero.legLeft.angle ?? 0, 10*dir, half, v=> hero.legLeft.angle=v, eas.easeOutSine).then?.(()=> k.tween(hero.legLeft.angle ?? 0, 0, half, v=> hero.legLeft.angle=v, eas.easeInSine)); k.tween(hero.legRight.angle ?? 0, -10*dir, half, v=> hero.legRight.angle=v, eas.easeOutSine).then?.(()=> k.tween(hero.legRight.angle ?? 0, 0, half, v=> hero.legRight.angle=v, eas.easeInSine)); };
+          k.tween(x0, x1, duration, v=> hero.root.pos.x=v, eas.easeInOutSine); walkOne(1, ()=> walkOne(-1, ()=> { isActingLocal=false; k.go('game', { autoStart: true }); })); }
+          const start = () => playWithExitAnim(); ['space','enter','left','right','a','d'].forEach(key=> k.onKeyPress(key, start)); k.onClick(start);
+        });
+      }
+
+      function defineGameScene(k) {
+        k.scene('game', (opts) => {
+          const viewW = k.width(), viewH = k.height(); const wallCenterX = viewW/2; spawnBackground(k, k.vec2(viewW, viewH), { treeClip: { centerX: wallCenterX, width: GAME_CONFIG.wall.width } }); const wallTop=50; const wallBottom=viewH-40; const climberScale = 1.15*1.10; const segmentH = Math.max(50, Math.floor(viewH/7)); const numSegmentsOnScreen = Math.ceil((wallBottom - wallTop) / segmentH) + 2; const INDICATOR_RADIUS=10; const INDICATOR_Y_RATIO=-0.25; const rock=spawnRockWall(k, wallCenterX, viewH, GAME_CONFIG.wall.width, segmentH);
+
+          const obstaclesLayer = k.add([k.pos(0,0), k.z(1)]);
+          // simple obstacle sequence (alternating)
+          const segments = []; for (let i=0;i<numSegmentsOnScreen+6;i++) segments.push({ side: i%2===0? 'left':'right' });
+
+          // HUD: narrower centered time bar
+          const padding=10; const scoreText=k.add([k.text('0', { size: Math.round(24*(GAME_CONFIG.uiScale||1)), font:'sink' }), k.pos(padding, padding), k.z(4000), k.color(255,255,255)]); const fullWidth=k.width()-padding*2; const barWidth=Math.floor(fullWidth*0.85); const barHeight=10; const bgX=Math.floor((k.width()-barWidth)/2); k.add([k.rect(barWidth, barHeight), k.pos(bgX, padding+30), k.color(255,255,255), k.opacity(0.12), k.z(4000)]); const timeBar=k.add([k.rect(barWidth, barHeight), k.pos(bgX, padding+30), k.color(80,200,120), k.z(4001)]); timeBar.fullWidth=barWidth; const setTime=(t)=>{ const frac=Math.max(0, Math.min(1, t / GAME_CONFIG.timeBar.maxSeconds)); timeBar.width = timeBar.fullWidth * frac; timeBar.color = frac < GAME_CONFIG.timeBar.dangerThreshold ? k.rgb(230,70,70) : k.rgb(80,200,120); };
+
+          let score=0; let timeRemaining=GAME_CONFIG.timeBar.maxSeconds; setTime(timeRemaining); const setScore=(s)=>{ scoreText.text = `${s}`; };
+
+          const climber = spawnClimber(k, wallCenterX, wallBottom - segmentH*1.2 + (viewH*0.10) - 50, climberScale);
+
+          // draw indicators
+          const nodes=[]; let hasSkippedFirstIndicator=false; function drawSegments(){ nodes.forEach(n=> n.destroy()); nodes.length=0; for (let i=0;i<numSegmentsOnScreen+2;i++){ const seg=segments[i]; if(!seg||!seg.side) continue; const baseY=wallBottom - i*segmentH - segmentH/2; const yPos = baseY + INDICATOR_Y_RATIO*segmentH - viewH*0.10; const xPos = rock.laneXAt(yPos, seg.side); if(!hasSkippedFirstIndicator){ hasSkippedFirstIndicator=true; continue; } nodes.push(obstaclesLayer.add([k.circle(INDICATOR_RADIUS), k.pos(xPos,yPos), k.anchor('center'), k.color(230,60,60), k.opacity(0.95), k.z(1.2)])); } } drawSegments();
+
+          function handleMove(side){ const nextSide = segments[0]?.side; if (nextSide && nextSide !== side) return; // fail => ignore in demo
+            score += 1; setScore(score); timeRemaining = Math.min(GAME_CONFIG.timeBar.maxSeconds, timeRemaining + GAME_CONFIG.timeBar.refillOnStepSeconds);
+            // scroll and add new
+            segments.shift(); segments.push({ side: Math.random()<0.5? 'left':'right' }); drawSegments(); }
+
+          const detachInput = setupInput(k, { onMove: handleMove, onStart: ()=>{} });
+          if (opts && opts.autoStart) {}
+
+          // Timer with difficulty ramp + cap
+          k.onUpdate(()=>{ const dt=Math.min(GAME_CONFIG.maxDtSeconds, k.dt()); let drain = dt; const ramp = Math.min(1.8, 0.015 * score); drain *= 1 + ramp; const full = GAME_CONFIG.timeBar.maxSeconds; const maxPerSecond = full / 0.5; const maxDrain = (maxPerSecond * dt) / full; drain = Math.min(drain, maxDrain); timeRemaining -= drain; setTime(timeRemaining); if (timeRemaining <= 0) { detachInput(); k.go('menu'); } });
+        });
+      }
+
+      const { k } = initKaboom();
+      defineGameScene(k);
+      defineMenuScene(k);
+      k.go('menu');
+    </script>
+  </body>
+  </html>
+
+
