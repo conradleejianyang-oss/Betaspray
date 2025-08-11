@@ -1,0 +1,8 @@
+}, i(_a2, "Color"), __publicField(_a2, "RED", new _a2(255, 0, 0)), __publicField(_a2, "GREEN", new _a2(0, 255, 0)), __publicField(_a2, "BLUE", new _a2(0, 0, 255)), __publicField(_a2, "YELLOW", new _a2(255, 255, 0)), __publicField(_a2, "MAGENTA", new _a2(255, 0, 255)), __publicField(_a2, "CYAN", new _a2(0, 255, 255)), __publicField(_a2, "WHITE", new _a2(255, 255, 255)), __publicField(_a2, "BLACK", new _a2(0, 0, 0)), _a2);
+function J(...n) {
+  if (n.length === 0) return new W(255, 255, 255);
+  if (n.length === 1) {
+    if (n[0] instanceof W) return n[0].clone();
+    if (typeof n[0] == "string") return W.fromHex(n[0]);
+    if (Array.isArray(n[0]) && n[0].length === 3) return W.fromArray(n[0]);
+  }
