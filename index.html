@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; media-src 'self' data: blob:; font-src 'self';" />
+    <title>Betaspray Climber</title>
+    <style>
+      html, body, #app { height: 100%; margin: 0; }
+      body { background: #0a0f1a; }
+      #mobile-controls { position: fixed; inset: auto 0 0 0; display: flex; justify-content: space-between; padding: env(safe-area-inset-bottom) 12px 12px 12px; pointer-events: none; }
+      .btn { pointer-events: auto; flex: 1; margin: 0 8px; height: 64px; border-radius: 12px; border: 2px solid #fff3; background: #ffffff14; color: #fff; font: 600 18px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; backdrop-filter: blur(6px); }
+      .btn:active { background: #ffffff22; }
+      @media (min-width: 900px) { #mobile-controls { display: none; } }
+    </style>
+    <script type="module" crossorigin src="/Betaspray/assets/index-BQlca_FZ.js"></script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="mobile-controls" aria-hidden="false" role="group" aria-label="Climb controls">
+      <button id="btn-left" class="btn" aria-label="Move left">⬅️ Left</button>
+      <button id="btn-right" class="btn" aria-label="Move right">Right ➡️</button>
+    </div>
+  </body>
+  </html>
+
+
