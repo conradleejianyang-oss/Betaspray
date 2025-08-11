@@ -9,7 +9,7 @@
     <style>
       html, body, #app { height: 100%; margin: 0; }
       body { background: #0a0f1a; }
-      #mobile-controls { position: fixed; inset: auto 0 0 0; display: flex; justify-content: space-between; padding: env(safe-area-inset-bottom) 12px 12px 12px; pointer-events: none; }
+      #mobile-controls { position: fixed; inset: auto 0 0 0; display: flex; justify-content: space-between; padding: env(safe-area-inset-bottom) 12px 12px 12px; pointer-events: none; z-index: 10000; }
       .btn { pointer-events: auto; flex: 1; margin: 0 8px; height: 64px; border-radius: 12px; border: 2px solid #fff3; background: #ffffff14; color: #fff; font: 600 18px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; backdrop-filter: blur(6px); }
       .btn:active { background: #ffffff22; }
       /* Keep mobile controls visible on desktop too so friends on any device can click */
@@ -179,6 +179,11 @@
           belt.pos = k.vec2(rp.x, rp.y + breathOffset + bodyH/2 - 7*s);
           legLeft.pos = k.vec2(rp.x - 7*s, rp.y + bodyH/2); legRight.pos = k.vec2(rp.x + 7*s, rp.y + bodyH/2);
           footLeft.pos = k.vec2(rp.x - 7*s, rp.y + bodyH/2 + 28*s); footRight.pos = k.vec2(rp.x + 7*s, rp.y + bodyH/2 + 28*s);
+          // Arms follow torso/base
+          const armsBaseY = rp.y + breathOffset - (bodyH/2);
+          armLeft.pos = k.vec2(rp.x - 12*s, armsBaseY);
+          armRight.pos = k.vec2(rp.x + 12*s, armsBaseY);
+          // Rope follows torso/base
           rope.pos = k.vec2(rp.x, rp.y + breathOffset*0.5 - 36*s); rope.height = Math.max(rope.height ?? 0, k.height()*2);
         });
         return c;
@@ -247,15 +252,21 @@
           // draw indicators
           const nodes=[]; let hasSkippedFirstIndicator=false; function drawSegments(){ nodes.forEach(n=> n.destroy()); nodes.length=0; for (let i=0;i<numSegmentsOnScreen+2;i++){ const seg=segments[i]; if(!seg||!seg.side) continue; const baseY=wallBottom - i*segmentH - segmentH/2; const yPos = baseY + INDICATOR_Y_RATIO*segmentH - viewH*0.10; const xPos = rock.laneXAt(yPos, seg.side); if(!hasSkippedFirstIndicator){ hasSkippedFirstIndicator=true; continue; } nodes.push(obstaclesLayer.add([k.circle(INDICATOR_RADIUS), k.pos(xPos,yPos), k.anchor('center'), k.color(230,60,60), k.opacity(0.95), k.z(1.2)])); } } drawSegments();
 
-          function handleMove(side){ const nextSide = segments[0]?.side; if (nextSide && nextSide !== side) return; // fail => ignore in demo
-            score += 1; setScore(score); timeRemaining = Math.min(GAME_CONFIG.timeBar.maxSeconds, timeRemaining + GAME_CONFIG.timeBar.refillOnStepSeconds);
-            // slide climber to lane and swing arms a bit to mimic reach
+          function handleMove(side){
+            const nextSide = segments[0]?.side;
+            // Always show a movement animation so input feels responsive
             const targetX = side==='left' ? rock.laneXAt(k.height()*0.45,'left') : rock.laneXAt(k.height()*0.45,'right');
             k.tween(climber.root.pos.x, targetX, 0.12, (v)=> (climber.root.pos.x=v), k.easings.easeOutCubic);
             const arm = side==='left'? climber.armLeft : climber.armRight; const fromA = arm.angle ?? (side==='left'? -20 : 20);
             k.tween(fromA, side==='left'? -60:60, 0.08, (v)=> (arm.angle=v), k.easings.easeOutCubic).then?.(()=> k.tween(arm.angle ?? 0, 0, 0.12, (v)=> (arm.angle=v), k.easings.easeInCubic));
-            // scroll and add new
-            segments.shift(); segments.push({ side: Math.random()<0.5? 'left':'right' }); drawSegments(); }
+            // If correct, score and scroll; if wrong, just animate without penalty in this demo
+            if (!nextSide || nextSide === side) {
+              score += 1; setScore(score);
+              timeRemaining = Math.min(GAME_CONFIG.timeBar.maxSeconds, timeRemaining + GAME_CONFIG.timeBar.refillOnStepSeconds);
+              segments.shift(); segments.push({ side: Math.random()<0.5? 'left':'right' });
+              drawSegments();
+            }
+          }
 
           const detachInput = setupInput(k, { onMove: handleMove, onStart: ()=>{} });
           // Also wire mobile buttons explicitly (already hooked in setupInput)
