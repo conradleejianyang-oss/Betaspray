@@ -4,27 +4,33 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="light dark" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self' https://unpkg.com; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' https://unpkg.com; connect-src 'self' https://unpkg.com; media-src 'self' data: blob:; font-src 'self';" />
-    <title>BetasprayGame1.0</title>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' https://unpkg.com; connect-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data:;" />
+    <title>BetasprayGame1.1</title>
     <style>
       html, body, #app { height: 100%; margin: 0; }
       body { background: #0a0f1a; }
-      #mobile-controls { position: fixed; left: 0; right: 0; bottom: 0; display: flex; justify-content: space-between; align-items: flex-end; padding: 0 8px calc(env(safe-area-inset-bottom) + 8px) 8px; pointer-events: none; z-index: 10000; }
-      .btn { pointer-events: auto; width: 64px; height: 64px; margin: 0; border-radius: 50%; border: 2px solid #fff3; background: #ffffff14; color: #fff; font: 600 20px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; backdrop-filter: blur(6px); display: inline-flex; align-items: center; justify-content: center; }
+      #mobile-controls { position: fixed; inset: auto 0 0 0; display: none; grid-template-columns: 1fr auto 1fr; align-items: center; justify-items: center; padding: env(safe-area-inset-bottom) 12px 12px 24px; pointer-events: none; }
+      .btn { pointer-events: auto; width: 30vw; max-width: 220px; min-width: 120px; height: 64px; border-radius: 14px; border: 2px solid #fff3; background: #ffffff1a; color: #fff; font: 700 18px system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; backdrop-filter: blur(8px); }
+      #spacer { width: 20vw; max-width: 160px; min-width: 80px; height: 1px; }
       .btn:active { background: #ffffff22; }
-      /* Keep mobile controls visible on desktop too so friends on any device can click */
     </style>
   </head>
   <body>
     <div id="app"></div>
-    <div id="mobile-controls" aria-hidden="true" role="group" aria-label="Climb controls" style="display:none">
-      <button id="btn-left" class="btn" aria-label="Move left" title="Left">⬅️</button>
-      <button id="btn-right" class="btn" aria-label="Move right" title="Right">➡️</button>
+    <div id="mobile-controls" aria-hidden="true" role="group" aria-label="Climb controls">
+      <button id="btn-left" class="btn" aria-label="Move left">⬅️</button>
+      <div id="spacer" aria-hidden="true"></div>
+      <button id="btn-right" class="btn" aria-label="Move right">➡️</button>
     </div>
 
-    <script type="module">
-      import kaboom from 'https://unpkg.com/kaboom/dist/kaboom.mjs';
+    <script>
+      // Inline kaboom runtime for offline use
+      // begin kaboom offline
+      
+      // Placeholder for kaboom inline. We'll inject the file contents below in a second edit.
+      // end kaboom offline
 
+      // -------------------- config.ts --------------------
       const GAME_CONFIG = {
         internalWidth: 540,
         internalHeight: 960,
@@ -32,18 +38,91 @@
         maxDtSeconds: 0.05,
         inputLockMs: 120,
         uiScale: 1.25,
-        timeBar: { maxSeconds: 6, refillOnStepSeconds: 0.4, dangerThreshold: 0.15 },
-        wall: { width: 160 },
+        timeBar: {
+          maxSeconds: 6,
+          refillOnStepSeconds: 0.4,
+          dangerThreshold: 0.15,
+        },
+        wall: {
+          width: 160,
+          segmentHeight: 40,
+        },
+        obstacles: {
+          startChance: 0.55,
+          endChance: 0.92,
+          endScore: 80,
+          maxSameSideInRow: 2,
+        },
       };
 
+      /** Linearly map a value from one range to another and clamp to output range. */
+      function remapClamped(value, inMin, inMax, outMin, outMax) {
+        if (inMax === inMin) return outMin;
+        const t = Math.min(1, Math.max(0, (value - inMin) / (inMax - inMin)));
+        return outMin + t * (outMax - outMin);
+      }
+
+      // -------------------- core/state.ts --------------------
+      function loadBest() {
+        const v = localStorage.getItem('climbtap_best');
+        const n = v ? Number(v) : 0;
+        return Number.isFinite(n) ? n : 0;
+      }
+
+      function saveBest(best) {
+        localStorage.setItem('climbtap_best', String(best));
+      }
+
+      // -------------------- core/input.ts --------------------
+      function showMobileControls() {
+        const el = document.getElementById('mobile-controls');
+        if (!el) return;
+        el.style.display = 'grid';
+      }
+
+      function hideMobileControls() {
+        const el = document.getElementById('mobile-controls');
+        if (!el) return;
+        el.style.display = 'none';
+      }
+
+      function setupInput(k, cbs) {
+        const onLeft = () => cbs.onMove('left');
+        const onRight = () => cbs.onMove('right');
+        const onStart = () => cbs.onStart();
+        const ctrls = [];
+        ctrls.push(k.onKeyPress('a', onLeft));
+        ctrls.push(k.onKeyPress('left', onLeft));
+        ctrls.push(k.onKeyPress('d', onRight));
+        ctrls.push(k.onKeyPress('right', onRight));
+        ctrls.push(k.onKeyPress('space', onStart));
+        ctrls.push(k.onKeyPress('enter', onStart));
+        const btnLeft = document.getElementById('btn-left');
+        const btnRight = document.getElementById('btn-right');
+        const add = (el, fn) => {
+          if (!el) return () => {};
+          const handler = (e) => { e.preventDefault(); fn(); };
+          el.addEventListener('pointerdown', handler);
+          return () => el.removeEventListener('pointerdown', handler);
+        };
+        const domUnsubLeft = add(btnLeft, onLeft);
+        const domUnsubRight = add(btnRight, onRight);
+        return () => {
+          ctrls.forEach((c) => c.cancel());
+          domUnsubLeft();
+          domUnsubRight();
+        };
+      }
+
+      // -------------------- core/loop.ts --------------------
       function initKaboom() {
-        const k = kaboom({
+        const k = (window.kaboom)({
           width: GAME_CONFIG.internalWidth,
           height: GAME_CONFIG.internalHeight,
           background: [196, 244, 248],
           global: false,
           touchToMouse: true,
-          debug: true,
+          debug: false,
           stretch: true,
           letterbox: true,
           crisp: true,
@@ -53,42 +132,20 @@
         return { k };
       }
 
-      // Simple input wiring (keyboard + mobile buttons)
-      function setupInput(k, cbs) {
-        const onLeft = () => cbs.onMove('left');
-        const onRight = () => cbs.onMove('right');
-        const onStart = () => cbs.onStart();
-        const off = [];
-        ['a', 'left'].forEach((key) => off.push(k.onKeyPress(key, onLeft)));
-        ['d', 'right'].forEach((key) => off.push(k.onKeyPress(key, onRight)));
-        ['space', 'enter'].forEach((key) => off.push(k.onKeyPress(key, onStart)));
-        const btnLeft = document.getElementById('btn-left');
-        const btnRight = document.getElementById('btn-right');
-        const add = (el, fn) => { if (!el) return () => {}; const h = (e) => { e.preventDefault(); fn(); }; el.addEventListener('pointerdown', h); return () => el.removeEventListener('pointerdown', h); };
-        const a = add(btnLeft, onLeft); const b = add(btnRight, onRight);
-        return () => { off.forEach((s) => s.cancel()); a(); b(); };
-      }
-
-      // Show/hide on-screen controls (only during gameplay)
-      function setControlsVisible(visible) {
-        const el = document.getElementById('mobile-controls');
-        if (!el) return;
-        el.style.display = visible ? 'flex' : 'none';
-        el.setAttribute('aria-hidden', visible ? 'false' : 'true');
-      }
-
-      // Background with mountains, trees, and shrubs framing the wall
+      // -------------------- render/background.ts --------------------
       function spawnBackground(k, viewSize, opts) {
-        const mountains = []; const clouds = []; const trees = []; const shrubs = [];
-        const rand = (min, max) => Math.random() * (max - min) + min;
-
-        const addTriangleRange = (count, baseY, color, zBase, minH, maxH, minW, maxW) => {
-          const [r,g,b] = color;
-          for (let i=0;i<count;i++) {
+        const mountains = [];
+        const clouds = [];
+        const trees = [];
+        const shrubs = [];
+        function rand(min, max) { return Math.random() * (max - min) + min; }
+        const addTriangleRange = (count, baseY, color, zBase, minHeight, maxHeight, minWidth, maxWidth) => {
+          const [r, g, b] = color;
+          for (let i = 0; i < count; i++) {
             const t = (i + 0.5) / count;
             const x = t * viewSize.x + rand(-viewSize.x * 0.06, viewSize.x * 0.06);
-            const height = rand(minH, maxH);
-            const width = rand(minW, maxW);
+            const height = rand(minHeight, maxHeight);
+            const width = rand(minWidth, maxWidth);
             const stripes = Math.max(8, Math.ceil(height / 6));
             const roundnessExp = 0.65;
             const stripeH = Math.ceil(height / stripes) + 1;
@@ -97,201 +154,1031 @@
               let w = width * Math.pow(frac, roundnessExp);
               w += Math.sin(frac * Math.PI) * width * 0.03;
               w = Math.max(4, w);
-              k.add([k.rect(w, stripeH), k.pos(x, baseY - height + s * stripeH), k.anchor('bot'), k.color(r,g,b), { z: zBase - i * 0.01 }]);
+              const h = stripeH;
+              const rect = k.add([
+                k.rect(w, h),
+                k.pos(x, baseY - height + s * h),
+                k.anchor('bot'),
+                k.color(r, g, b),
+                { z: zBase - i * 0.01 },
+              ]);
+              mountains.push(rect);
+            }
+            const snowStripes = Math.max(2, Math.round((height * 0.12) / stripeH));
+            for (let s = 0; s < snowStripes; s++) {
+              const frac = (s + 1) / stripes;
+              let w = width * Math.pow(frac, roundnessExp) * 0.8;
+              w += Math.sin(frac * Math.PI) * width * 0.015;
+              w = Math.max(3, w);
+              const y = baseY - height + s * stripeH;
+              const cap = k.add([
+                k.rect(w, stripeH, { radius: 2 }),
+                k.pos(x, y + 1),
+                k.anchor('bot'),
+                k.color(245, 248, 255),
+                k.opacity(0.9),
+                { z: zBase + 0.005 - i * 0.01 },
+              ]);
+              mountains.push(cap);
             }
           }
         };
-        addTriangleRange(7, viewSize.y * 0.86, [140,220,190], -30, viewSize.y * 0.20, viewSize.y * 0.34, viewSize.x * 0.22, viewSize.x * 0.44);
-        addTriangleRange(6, viewSize.y * 0.92, [120,205,175], -28, viewSize.y * 0.24, viewSize.y * 0.38, viewSize.x * 0.24, viewSize.x * 0.48);
-        addTriangleRange(5, viewSize.y * 0.97, [100,190,160], -26, viewSize.y * 0.26, viewSize.y * 0.42, viewSize.x * 0.26, viewSize.x * 0.52);
-
-        // Clouds
-        for (let i=0;i<6;i++) {
+        addTriangleRange(7, viewSize.y * 0.86, [140, 220, 190], -30, viewSize.y * 0.20, viewSize.y * 0.34, viewSize.x * 0.22, viewSize.x * 0.44);
+        addTriangleRange(6, viewSize.y * 0.92, [120, 205, 175], -28, viewSize.y * 0.24, viewSize.y * 0.38, viewSize.x * 0.24, viewSize.x * 0.48);
+        addTriangleRange(5, viewSize.y * 0.97, [100, 190, 160], -26, viewSize.y * 0.26, viewSize.y * 0.42, viewSize.x * 0.26, viewSize.x * 0.52);
+        for (let i = 0; i < 6; i++) {
           const width = rand(viewSize.x * 0.2, viewSize.x * 0.35);
-          const c = k.add([k.rect(width, width*0.3, { radius: width*0.15 }), k.pos(rand(0, viewSize.x), rand(20, viewSize.y*0.6)), k.color(255,255,255), k.opacity(0.25), { z: -20, speed: rand(5,15) }]);
+          const c = k.add([
+            k.rect(width, width * 0.3, { radius: width * 0.15 }),
+            k.pos(rand(0, viewSize.x), rand(20, viewSize.y * 0.6)),
+            k.color(255, 255, 255),
+            k.opacity(0.25),
+            { z: -20, speed: rand(5, 15) },
+          ]);
           clouds.push(c);
         }
-
-        // Ground and trees
         const treeBaseY = viewSize.y * 0.88;
-        k.add([k.rect(viewSize.x, Math.max(10, viewSize.y - treeBaseY + 8), { radius: 6 }), k.pos(0, viewSize.y), k.anchor('botleft'), k.color(74,52,43), { z: -2 }]);
-        const clip = opts && opts.treeClip; const minX = clip ? clip.centerX - clip.width/2 : 0; const maxX = clip ? clip.centerX + clip.width/2 : viewSize.x;
+        const ground = k.add([
+          k.rect(viewSize.x, Math.max(10, viewSize.y - treeBaseY + 8), { radius: 6 }),
+          k.pos(0, viewSize.y),
+          k.anchor('botleft'),
+          k.color(74, 52, 43),
+          { z: -2 },
+        ]);
+        for (let i = 0; i < 6; i++) {
+          const w = rand(viewSize.x * 0.12, viewSize.x * 0.3);
+          const h = rand(8, 16);
+          k.add([
+            k.rect(w, h, { radius: 8 }),
+            k.pos(rand(10, viewSize.x - 10), viewSize.y - rand(6, 20)),
+            k.anchor('bot'),
+            k.color(56, 40, 34),
+            k.opacity(0.7),
+            { z: -1.9 },
+          ]);
+        }
+        const treeCount = 8;
+        const clip = opts && opts.treeClip;
+        const minX = clip ? clip.centerX - clip.width / 2 : 0;
+        const maxX = clip ? clip.centerX + clip.width / 2 : viewSize.x;
         const addTree = (x, scale) => {
-          const trunk = k.add([k.rect(5*scale, 18*scale, { radius: 2 }), k.pos(x, treeBaseY), k.anchor('bot'), k.color(84,60,44), { z: -1.5 }]);
+          const trunk = k.add([
+            k.rect(5 * scale, 18 * scale, { radius: 2 }),
+            k.pos(x, treeBaseY),
+            k.anchor('bot'),
+            k.color(84, 60, 44),
+            { z: -1.5 },
+          ]);
           const stripes = 5;
-          for (let s=0;s<stripes;s++) {
-            const frac = (s+1)/stripes; const w = 26*scale*frac; const h = 6*scale; const y = treeBaseY - 18*scale - s*h + 2*scale;
-            trees.push(k.add([k.rect(w,h, { radius: 3 }), k.pos(x,y), k.anchor('center'), k.color(40 + s*4, 120 + s*3, 80), { z: -1.45 }]));
+          for (let s = 0; s < stripes; s++) {
+            const frac = (s + 1) / stripes;
+            const w = 26 * scale * frac;
+            const h = 6 * scale;
+            const y = treeBaseY - 18 * scale - s * h + 2 * scale;
+            const leaf = k.add([
+              k.rect(w, h, { radius: 3 }),
+              k.pos(x, y),
+              k.anchor('center'),
+              k.color(40 + s * 4, 120 + s * 3, 80),
+              { z: -1.45 },
+            ]);
+            trees.push(leaf);
           }
           trees.push(trunk);
         };
-        for (let i=0;i<8;i++) addTree(rand(minX+10, maxX-10), rand(0.8,1.2));
+        for (let i = 0; i < treeCount; i++) {
+          const x = rand(minX + 10, maxX - 10);
+          const scale = rand(0.8, 1.2);
+          addTree(x, scale);
+        }
+        const leftRange = { min: 10, max: Math.max(20, minX - 10) };
+        const rightRange = { min: Math.min(viewSize.x - 20, maxX + 10), max: viewSize.x - 10 };
         const addCluster = (range, count) => {
-          if (!range || range.max - range.min < 10) return;
-          for (let i=0;i<count;i++) { const x = rand(range.min, range.max); const sc = rand(0.9, 1.5); addTree(x, sc);
-            if (Math.random() < 0.7) { const w = rand(12,26)*(sc*0.6), h = rand(6,10)*(sc*0.5); shrubs.push(k.add([k.rect(w,h,{radius:4}), k.pos(x+rand(-8,8), treeBaseY-2), k.anchor('bot'), k.color(66,120,72), k.opacity(0.9), { z: -1.48 }])); }
+          if (range.max - range.min < 10) return;
+          for (let i = 0; i < count; i++) {
+            const x = rand(range.min, range.max);
+            const scale = rand(0.9, 1.5);
+            addTree(x, scale);
+            if (Math.random() < 0.7) {
+              const w = rand(12, 26) * (scale * 0.6);
+              const h = rand(6, 10) * (scale * 0.5);
+              const shrub = k.add([
+                k.rect(w, h, { radius: 4 }),
+                k.pos(x + rand(-8, 8), treeBaseY - 2),
+                k.anchor('bot'),
+                k.color(66, 120, 72),
+                k.opacity(0.9),
+                { z: -1.48 },
+              ]);
+              shrubs.push(shrub);
+              if (Math.random() < 0.5) {
+                const sprig = k.add([
+                  k.rect(w * 0.6, h * 0.7, { radius: 3 }),
+                  k.pos(x + rand(-10, 10), treeBaseY - h * 0.6),
+                  k.anchor('bot'),
+                  k.color(58, 100, 64),
+                  { z: -1.47 },
+                ]);
+                shrubs.push(sprig);
+              }
+            }
           }
         };
-        addCluster({ min: 10, max: Math.max(20, minX-10) }, 8);
-        addCluster({ min: Math.min(viewSize.x-20, maxX+10), max: viewSize.x-10 }, 8);
-
-        k.onUpdate(() => { for (const c of clouds) { const s = c.speed ?? 10; c.move(s,0); const pos = c.pos; const width = c.width; if (pos.x - width/2 > viewSize.x + 10) { c.pos.x = -10 - width/2; c.pos.y = rand(20, viewSize.y*0.6);} } });
-        return { mountains, clouds, trees, shrubs };
+        addCluster(leftRange, 8);
+        addCluster(rightRange, 8);
+        k.onUpdate(() => {
+          for (const c of clouds) {
+            const s = c.speed ?? 10;
+            c.move(s, 0);
+            const pos = c.pos;
+            const width = c.width;
+            if (pos.x - width / 2 > viewSize.x + 10) {
+              c.pos.x = -10 - width / 2;
+              c.pos.y = rand(20, viewSize.y * 0.6);
+            }
+          }
+        });
+        return { mountains, clouds, trees, shrubs, ground };
       }
 
-      // Rock wall bands
+      // -------------------- render/rock.ts --------------------
       function spawnRockWall(k, centerX, viewH, width, bandH) {
-        const baseColor = k.rgb(110,104,96);
+        const baseColor = k.rgb(110, 104, 96);
         const bandCount = Math.ceil(viewH / bandH) + 4;
-        const leftOffsets = []; const rightOffsets = []; let curL=0, curR=0; const maxJitter = width*0.12;
-        for (let i=0;i<bandCount;i++){ curL += (Math.random()-0.5)*(width*0.06); curR += (Math.random()-0.5)*(width*0.06); curL = Math.max(-maxJitter, Math.min(maxJitter, curL)); curR = Math.max(-maxJitter, Math.min(maxJitter, curR)); leftOffsets.push(curL); rightOffsets.push(curR); }
-        const edgesAt = (y) => { const idx = Math.max(0, Math.min(bandCount-1, Math.floor(y / bandH))); const lOff = leftOffsets[idx] ?? 0; const rOff = rightOffsets[idx] ?? 0; return { left: centerX - width/2 + lOff, right: centerX + width/2 + rOff }; };
-        const laneXAt = (y, side) => { const {left,right} = edgesAt(y); const w = right - left; const margin = w * 0.25; return side === 'left' ? left + margin : right - margin; };
-        const bands = []; const root = k.add([k.pos(0,0)]);
-        for (let i=0;i<bandCount;i++){ const yMid = -bandH/2 + i*bandH; const { left, right } = edgesAt(yMid); const w = right - left; const o = root.add([k.rect(w, bandH + 4), k.pos((left+right)/2, yMid), k.anchor('center'), k.color(baseColor), k.z(0)]); bands.push(o); }
-        function spawnTopBand(){ const topL = leftOffsets[0] ?? 0; const topR = rightOffsets[0] ?? 0; let nextL = topL + (Math.random()-0.5)*(width*0.06); let nextR = topR + (Math.random()-0.5)*(width*0.06); const clip = (v)=>Math.max(-maxJitter, Math.min(maxJitter, v)); nextL=clip(nextL); nextR=clip(nextR); leftOffsets.unshift(nextL); rightOffsets.unshift(nextR); leftOffsets.pop(); rightOffsets.pop(); const yMid = (bands[0]?.pos.y ?? -bandH/2) - bandH; const {left,right} = edgesAt(0); const w = right - left; const o = root.add([k.rect(w, bandH + 4), k.pos((left+right)/2, yMid), k.anchor('center'), k.color(baseColor), k.z(0)]); bands.unshift(o); const last = bands.pop(); last?.destroy(); }
-        function scrollOnce(duration){ return new Promise((resolve)=>{ const startY = root.pos.y; k.tween(startY, startY + bandH, duration, (v)=> (root.pos.y = v), k.easings.linear).then?.(()=>{ root.pos.y = 0; for (const b of bands) b.pos.y += bandH; spawnTopBand(); resolve(); }); }); }
+        const leftOffsets = [];
+        const rightOffsets = [];
+        let curL = 0;
+        let curR = 0;
+        const maxJitter = width * 0.12;
+        for (let i = 0; i < bandCount; i++) {
+          curL += (Math.random() - 0.5) * (width * 0.06);
+          curR += (Math.random() - 0.5) * (width * 0.06);
+          curL = Math.max(-maxJitter, Math.min(maxJitter, curL));
+          curR = Math.max(-maxJitter, Math.min(maxJitter, curR));
+          leftOffsets.push(curL);
+          rightOffsets.push(curR);
+        }
+        const edgesAt = (y) => {
+          const idx = Math.max(0, Math.min(bandCount - 1, Math.floor(y / bandH)));
+          const lOff = leftOffsets[idx] ?? 0;
+          const rOff = rightOffsets[idx] ?? 0;
+          const left = centerX - width / 2 + lOff;
+          const right = centerX + width / 2 + rOff;
+          return { left, right };
+        };
+        const laneXAt = (y, side) => {
+          const { left, right } = edgesAt(y);
+          const w = right - left;
+          const margin = w * 0.25;
+          return side === 'left' ? left + margin : right - margin;
+        };
+        const bands = [];
+        const root = k.add([k.pos(0, 0)]);
+        for (let i = 0; i < bandCount; i++) {
+          const yMid = -bandH / 2 + i * bandH;
+          const { left, right } = edgesAt(yMid);
+          const w = right - left;
+          const o = root.add([
+            k.rect(w, bandH + 4),
+            k.pos((left + right) / 2, yMid),
+            k.anchor('center'),
+            k.color(baseColor),
+            k.z(0),
+          ]);
+          bands.push(o);
+        }
+        const decoCount = 10;
+        for (let i = 0; i < decoCount; i++) {
+          const bi = Math.floor(Math.random() * bandCount);
+          const band = bands[bi] ?? bands[0];
+          const y = (band?.pos.y ?? 0) + (Math.random() * bandH - bandH / 2);
+          const { left, right } = edgesAt(y);
+          const x = left + (right - left) * Math.random();
+          const scale = 0.6 + Math.random() * 0.8;
+          root.add([
+            k.rect(12 * scale, 4 * scale, { radius: 2 }),
+            k.pos(x, y),
+            k.anchor('center'),
+            k.color(78, 122, 76),
+            k.z(0.05),
+          ]);
+          if (Math.random() < 0.4) {
+            root.add([
+              k.rect(6 * scale, 10 * scale, { radius: 3 }),
+              k.pos(x + (Math.random() * 10 - 5), y - 6 * scale),
+              k.anchor('bot'),
+              k.color(64, 100, 64),
+              k.z(0.06),
+            ]);
+          }
+        }
+        function spawnTopBand() {
+          const topL = leftOffsets[0] ?? 0;
+          const topR = rightOffsets[0] ?? 0;
+          let nextL = topL + (Math.random() - 0.5) * (width * 0.06);
+          let nextR = topR + (Math.random() - 0.5) * (width * 0.06);
+          nextL = Math.max(-maxJitter, Math.min(maxJitter, nextL));
+          nextR = Math.max(-maxJitter, Math.min(maxJitter, nextR));
+          leftOffsets.unshift(nextL);
+          rightOffsets.unshift(nextR);
+          leftOffsets.pop();
+          rightOffsets.pop();
+          const yMid = (bands[0]?.pos.y ?? -bandH / 2) - bandH;
+          const { left, right } = edgesAt(0);
+          const w = right - left;
+          const o = root.add([
+            k.rect(w, bandH + 4),
+            k.pos((left + right) / 2, yMid),
+            k.anchor('center'),
+            k.color(baseColor),
+            k.z(0),
+          ]);
+          bands.unshift(o);
+          const last = bands.pop();
+          last?.destroy();
+        }
+        function scrollOnce(duration) {
+          return new Promise((resolve) => {
+            const startY = root.pos.y;
+            k.tween(startY, startY + bandH, duration, (v) => (root.pos.y = v), k.easings.linear).then?.(() => {
+              root.pos.y = 0;
+              for (const b of bands) { b.pos.y += bandH; }
+              spawnTopBand();
+              resolve();
+            });
+          });
+        }
         return { root, laneXAt, edgesAt, scrollOnce };
       }
 
-      // Climber (simple segmented) with extra-long rope
-      function spawnClimber(k, wallCenterX, baseY, modelScale=1) {
-        const s = modelScale; const laneOffset = GAME_CONFIG.wall.width * 0.25; const leftX = wallCenterX - laneOffset; const rightX = wallCenterX + laneOffset;
+      // -------------------- systems/hud.ts --------------------
+      function createHud(k) {
+        const padding = 10;
+        const scoreSize = Math.round(36 * (GAME_CONFIG.uiScale ?? 1) * 1.1);
+        const scoreX = Math.floor(k.width() / 2);
+        const scoreY = 12;
+        const scoreOutlineOffsets = [
+          [-2, 0], [2, 0], [0, -2], [0, 2],
+          [-1, -1], [1, -1], [-1, 1], [1, 1],
+        ];
+        for (const [ox, oy] of scoreOutlineOffsets) {
+          k.add([
+            k.text('0', { size: scoreSize, font: 'sink' }),
+            k.pos(scoreX + ox, scoreY + oy),
+            k.anchor('top'),
+            k.z(4001),
+            k.color(0, 0, 0),
+            'score_outline',
+          ]);
+        }
+        const scoreText = k.add([
+          k.text('0', { size: scoreSize, font: 'sink', letterSpacing: 1 }),
+          k.pos(scoreX, scoreY),
+          k.anchor('top'),
+          k.z(4002),
+          k.color(255, 255, 255),
+        ]);
+        const fullWidth = k.width() - padding * 2;
+        const barWidth = Math.floor(fullWidth * 0.85 * 0.7);
+        const barHeight = Math.floor(10 * 1.5);
+        const bgX = Math.floor((k.width() - barWidth) / 2);
+        k.add([
+          k.rect(barWidth, barHeight),
+          k.pos(bgX, padding + 52),
+          k.color(255, 255, 255),
+          k.opacity(0.12),
+          k.z(4000),
+        ]);
+        const timeBar = k.add([
+          k.rect(barWidth, barHeight),
+          k.pos(bgX, padding + 52),
+          k.color(80, 200, 120),
+          k.z(4001),
+          { fullWidth: barWidth },
+        ]);
+        function setTime(t) {
+          const frac = Math.max(0, Math.min(1, t / GAME_CONFIG.timeBar.maxSeconds));
+          timeBar.width = timeBar.fullWidth * frac;
+          const danger = frac < GAME_CONFIG.timeBar.dangerThreshold;
+          timeBar.color = danger ? k.rgb(230, 70, 70) : k.rgb(80, 200, 120);
+        }
+        function setScore(score, best) {
+          const outlines = k.get('score_outline');
+          for (const o of outlines) { o.text = String(score); }
+          if (scoreText) scoreText.text = `${score}`;
+        }
+        return { setScore, setTime };
+      }
+
+      // -------------------- systems/obstacles.ts --------------------
+      function createObstacleState(seed = Math.random() * 1e9) {
+        let x = (seed | 0) || 123456789;
+        const rng = () => { x ^= x << 13; x ^= x >>> 17; x ^= x << 5; return ((x >>> 0) % 100000) / 100000; };
+        return { rng };
+      }
+      function nextObstacle(score, lastSide, sameSideRun, rng) {
+        let side = rng() < 0.5 ? 'left' : 'right';
+        if (lastSide && sameSideRun >= GAME_CONFIG.obstacles.maxSameSideInRow) {
+          side = lastSide === 'left' ? 'right' : 'left';
+        }
+        const newRun = lastSide === side ? sameSideRun + 1 : 1;
+        return { side, newRun, newLast: side };
+      }
+      function seedInitialSegments(count, rng) {
+        const segs = [];
+        let last = null;
+        let run = 0;
+        for (let i = 0; i < count; i++) {
+          const n = nextObstacle(0, last, run, rng);
+          const seg = { side: n.side };
+          populateHoldsForSegment(seg, rng);
+          segs.push(seg);
+          last = n.newLast;
+          run = n.newRun;
+        }
+        return segs;
+      }
+      function generateHoldSpec(rng) {
+        const rect = rng() < 0.5;
+        const color = rng() < 0.33 ? [176, 170, 162] : rng() < 0.66 ? [160, 154, 148] : [188, 180, 172];
+        return rect
+          ? { kind: 'rect', w: 14 + Math.floor(rng() * 6), h: 6 + Math.floor(rng() * 3), rotDeg: (rng() - 0.5) * 15, offsetX: (rng() - 0.5) * 10, offsetYRatio: (rng() - 0.5) * 0.2, color }
+          : { kind: 'circle', r: 5 + Math.floor(rng() * 3), rotDeg: 0, offsetX: (rng() - 0.5) * 10, offsetYRatio: (rng() - 0.5) * 0.2, color };
+      }
+      function populateHoldsForSegment(seg, rng) {
+        const allowed = seg.side ? [seg.side] : ['left', 'right'];
+        seg.holds = seg.holds ?? {};
+        for (const s of allowed) {
+          const spec = generateHoldSpec(rng);
+          spec.offsetYRatio = -0.25 + (rng() - 0.5) * 0.1;
+          spec.offsetX = (rng() - 0.5) * 8;
+          seg.holds[s] = spec;
+        }
+      }
+
+      // -------------------- systems/climber.ts --------------------
+      function spawnClimber(k, wallCenterX, baseY, modelScale = 1) {
+        const s = modelScale;
+        const laneOffset = GAME_CONFIG.wall.width * 0.25;
+        const leftX = wallCenterX - laneOffset;
+        const rightX = wallCenterX + laneOffset;
         const root = k.add([k.pos(leftX, baseY), k.anchor('center'), k.z(10)]);
-        const shirt = k.rgb(28,120,200), skin = k.rgb(250,215,170), hairC = k.rgb(60,40,30), pants = k.rgb(170,120,40), shoe = k.rgb(22,26,30), beltC = k.rgb(200,80,40), ropeC = k.rgb(230,110,40);
-        const bodyW = 24*s, bodyH = 30*s;
-        const body = k.add([k.rect(bodyW, bodyH, { radius: 2*s }), k.pos(0,0), k.color(shirt), k.anchor('center'), k.z(11)]);
-        const neck = k.add([k.rect(8*s, 4*s, { radius: 1*s }), k.pos(0, -(bodyH/2 + 6*s)), k.anchor('center'), k.color(skin), k.z(12)]);
-        const head = k.add([k.rect(14*s, 14*s, { radius: 1*s }), k.pos(0, -(bodyH/2 + 14*s)), k.anchor('center'), k.color(skin), k.z(13)]);
-        const hair = k.add([k.rect(16*s, 16*s), k.pos(-2*s, -(bodyH/2 + 16*s)), k.anchor('center'), k.color(hairC), k.z(12)]);
-        const belt = k.add([k.rect(bodyW, 5*s, { radius: 1*s }), k.pos(0, bodyH/2 - 7*s), k.anchor('center'), k.color(beltC), k.z(12)]);
-        const legLeft = k.add([k.rect(10*s, 28*s, { radius: 1*s }), k.pos(-7*s, bodyH/2), k.anchor('top'), k.color(pants), k.z(10)]);
-        const legRight = k.add([k.rect(10*s, 28*s, { radius: 1*s }), k.pos(7*s, bodyH/2), k.anchor('top'), k.color(pants), k.z(10)]);
-        const footLeft = k.add([k.rect(10*s, 6*s, { radius: 1*s }), k.pos(-7*s, bodyH/2 + 28*s), k.anchor('top'), k.color(shoe), k.z(10)]);
-        const footRight = k.add([k.rect(10*s, 6*s, { radius: 1*s }), k.pos(7*s, bodyH/2 + 28*s), k.anchor('top'), k.color(shoe), k.z(10)]);
-        const armLeft = k.add([k.rect(6*s, 28*s, { radius: 1*s }), k.pos(-12*s, -(bodyH/2)), k.anchor('bot'), k.color(skin), k.z(12)]);
-        const armRight = k.add([k.rect(6*s, 28*s, { radius: 1*s }), k.pos(12*s, -(bodyH/2)), k.anchor('bot'), k.color(skin), k.z(12)]);
-        const rope = k.add([k.rect(2*s, Math.max(80*s, k.height()*2)), k.pos(0, -36*s), k.anchor('top'), k.color(ropeC), k.z(9)]);
-
-        const c = { root, body, head, hair, neck, belt, legLeft, legRight, footLeft, footRight, armLeft, armRight, rope, side: 'left', jitterTime: 0, leftX, rightX, baseY, armReachLeft: 0, armReachRight: 0, headRadius: 8*s, scale: s };
-
+        const shirtColor = k.rgb(28, 120, 200);
+        const shirtDark = k.rgb(20, 92, 160);
+        const skin = k.rgb(250, 215, 170);
+        const hairColor = k.rgb(60, 40, 30);
+        const pants = k.rgb(170, 120, 40);
+        const shoe = k.rgb(22, 26, 30);
+        const harnessRed = k.rgb(180, 50, 40);
+        const beltColor = k.rgb(200, 80, 40);
+        const ropeColor = k.rgb(230, 110, 40);
+        const bodyW = 24 * s;
+        const bodyH = 30 * s;
+        const body = k.add([k.rect(bodyW, bodyH, { radius: 2 * s }), k.pos(0, 0), k.color(shirtColor), k.anchor('center'), k.z(11), k.rotate(0)]);
+        const neck = k.add([k.rect(8 * s, 8 * s, { radius: 1 * s }), k.pos(0, -(bodyH / 2 + 3.5 * s)), k.anchor('center'), k.color(skin), k.z(12), k.rotate(0)]);
+        const headRadius = 8 * s;
+        const head = k.add([k.rect(14 * s, 14 * s, { radius: 1 * s }), k.pos(0, -(bodyH / 2 + 14 * s)), k.anchor('center'), k.color(skin), k.z(13), k.rotate(0)]);
+        const hairBack = k.add([k.rect(18 * s, 12 * s, { radius: 2 * s }), k.pos(0, -(bodyH / 2 + 14 * s) + 3 * s), k.anchor('center'), k.color(hairColor), k.z(11.8), k.rotate(0)]);
+        const hair = k.add([k.rect(16 * s, 16 * s, { radius: 2 * s }), k.pos(-2 * s, -(bodyH / 2 + 16 * s)), k.anchor('center'), k.color(hairColor), k.z(12), k.rotate(0)]);
+        const belt = k.add([k.rect(bodyW, 5 * s, { radius: 1 * s }), k.pos(0, bodyH / 2 - 7 * s), k.anchor('center'), k.color(beltColor), k.z(12), k.rotate(0)]);
+        const harnessL = k.add([k.rect(10 * s, 8 * s, { radius: 2 * s }), k.pos(-6 * s, bodyH / 2 - 2 * s), k.anchor('center'), k.color(harnessRed), k.opacity(0), k.z(12), k.rotate(0)]);
+        const harnessR = k.add([k.rect(10 * s, 8 * s, { radius: 2 * s }), k.pos(6 * s, bodyH / 2 - 2 * s), k.anchor('center'), k.color(harnessRed), k.opacity(0), k.z(12), k.rotate(0)]);
+        const loopCol = k.rgb(150, 50, 40);
+        const legLoopWidth = 12 * s;
+        const legLoopHeight = 3 * s;
+        const legLoopLeft = k.add([k.rect(legLoopWidth, legLoopHeight, { radius: 1.5 * s }), k.pos(-7 * s, bodyH / 2 + 4 * s), k.anchor('center'), k.color(loopCol), k.z(11)]);
+        const legLoopRight = k.add([k.rect(legLoopWidth, legLoopHeight, { radius: 1.5 * s }), k.pos(7 * s, bodyH / 2 + 4 * s), k.anchor('center'), k.color(loopCol), k.z(11)]);
+        const legLeft = k.add([k.rect(10 * s, 28 * s, { radius: 1 * s }), k.pos(-7 * s, bodyH / 2), k.anchor('top'), k.color(pants), k.z(10), k.rotate(0)]);
+        const legRight = k.add([k.rect(10 * s, 28 * s, { radius: 1 * s }), k.pos(7 * s, bodyH / 2), k.anchor('top'), k.color(pants), k.z(10), k.rotate(0)]);
+        const footLeft = k.add([k.rect(10 * s, 6 * s, { radius: 1 * s }), k.pos(-7 * s, bodyH / 2 + 28 * s), k.anchor('top'), k.color(shoe), k.z(10), k.rotate(0)]);
+        const footRight = k.add([k.rect(10 * s, 6 * s, { radius: 1 * s }), k.pos(7 * s, bodyH / 2 + 28 * s), k.anchor('top'), k.color(shoe), k.z(10), k.rotate(0)]);
+        const shoulderOffset = 12 * s * 1.1;
+        const armLeft = k.add([k.rect(6 * s, 28 * s, { radius: 1 * s }), k.pos(-shoulderOffset, -(bodyH / 2)), k.anchor('bot'), k.color(skin), k.z(12), k.rotate(0)]);
+        const armRight = k.add([k.rect(6 * s, 28 * s, { radius: 1 * s }), k.pos(shoulderOffset, -(bodyH / 2)), k.anchor('bot'), k.color(skin), k.z(12), k.rotate(0)]);
+        const sleeveW = 10 * s;
+        const sleeveH = 12 * s;
+        const sleeveL = armLeft.add([k.rect(sleeveW, sleeveH, { radius: 2 * s }), k.pos(0, 0), k.anchor('bot'), k.color(shirtColor), k.z(12.2)]);
+        const sleeveR = armRight.add([k.rect(sleeveW, sleeveH, { radius: 2 * s }), k.pos(0, 0), k.anchor('bot'), k.color(shirtColor), k.z(12.2)]);
+        const rope = k.add([k.rect(2 * s, Math.max(80 * s, k.height() * 2)), k.pos(0, -36 * s), k.anchor('top'), k.color(ropeColor), k.z(9), k.rotate(0)]);
+        const shirtLight = k.rgb(40, 150, 220);
+        const skinShadow = k.rgb(235, 200, 158);
+        const pantsDark = k.rgb(140, 100, 32);
+        const pecL = body.add([k.rect(10 * s, 6 * s, { radius: 2 * s }), k.pos(-6 * s, -10 * s), k.anchor('center'), k.color(shirtLight), k.opacity(0.25), k.z(11.1), k.rotate(-8)]);
+        const pecR = body.add([k.rect(10 * s, 6 * s, { radius: 2 * s }), k.pos(6 * s, -10 * s), k.anchor('center'), k.color(shirtLight), k.opacity(0.25), k.z(11.1), k.rotate(8)]);
+        const abs1 = body.add([k.rect(8 * s, 4 * s, { radius: 1 * s }), k.pos(0, 0), k.anchor('center'), k.color(shirtDark), k.opacity(0.18), k.z(11.1)]);
+        const abs2 = body.add([k.rect(8 * s, 4 * s, { radius: 1 * s }), k.pos(0, 6 * s), k.anchor('center'), k.color(shirtDark), k.opacity(0.18), k.z(11.1)]);
+        const abs3 = body.add([k.rect(8 * s, 4 * s, { radius: 1 * s }), k.pos(0, 12 * s), k.anchor('center'), k.color(shirtDark), k.opacity(0.18), k.z(11.1)]);
+        const obliqueL = body.add([k.rect(6 * s, 10 * s, { radius: 2 * s }), k.pos(-10 * s, 4 * s), k.anchor('center'), k.color(shirtDark), k.opacity(0.12), k.z(11.05), k.rotate(18)]);
+        const obliqueR = body.add([k.rect(6 * s, 10 * s, { radius: 2 * s }), k.pos(10 * s, 4 * s), k.anchor('center'), k.color(shirtDark), k.opacity(0.12), k.z(11.05), k.rotate(-18)]);
+        const neckShade = neck.add([k.rect(8 * s, 3 * s, { radius: 1 * s }), k.pos(0, 1 * s), k.anchor('top'), k.color(skinShadow), k.opacity(0.25), k.z(12.1)]);
+        const lBicep = armLeft.add([k.rect(7 * s, 10 * s, { radius: 3 * s }), k.pos(0, -16 * s), k.anchor('center'), k.color(skinShadow), k.opacity(0.22), k.z(12.1)]);
+        const lFore = armLeft.add([k.rect(6 * s, 9 * s, { radius: 2 * s }), k.pos(0, -6 * s), k.anchor('center'), k.color(skinShadow), k.opacity(0.18), k.z(12.1)]);
+        const rBicep = armRight.add([k.rect(7 * s, 10 * s, { radius: 3 * s }), k.pos(0, -16 * s), k.anchor('center'), k.color(skinShadow), k.opacity(0.22), k.z(12.1)]);
+        const rFore = armRight.add([k.rect(6 * s, 9 * s, { radius: 2 * s }), k.pos(0, -6 * s), k.anchor('center'), k.color(skinShadow), k.opacity(0.18), k.z(12.1)]);
+        const thighL = legLeft.add([k.rect(10 * s, 16 * s, { radius: 2 * s }), k.pos(0, 8 * s), k.anchor('top'), k.color(pantsDark), k.opacity(0.18), k.z(10.1)]);
+        const thighR = legRight.add([k.rect(10 * s, 16 * s, { radius: 2 * s }), k.pos(0, 8 * s), k.anchor('top'), k.color(pantsDark), k.opacity(0.18), k.z(10.1)]);
+        const shinL = legLeft.add([k.rect(8 * s, 10 * s, { radius: 2 * s }), k.pos(0, 18 * s), k.anchor('top'), k.color(pantsDark), k.opacity(0.12), k.z(10.1)]);
+        const shinR = legRight.add([k.rect(8 * s, 10 * s, { radius: 2 * s }), k.pos(0, 18 * s), k.anchor('top'), k.color(pantsDark), k.opacity(0.12), k.z(10.1)]);
+        const kneeL = legLeft.add([k.circle(2.5 * s), k.pos(0, 16 * s), k.anchor('center'), k.color(220, 220, 220), k.opacity(0.15), k.z(10.2)]);
+        const kneeR = legRight.add([k.circle(2.5 * s), k.pos(0, 16 * s), k.anchor('center'), k.color(220, 220, 220), k.opacity(0.15), k.z(10.2)]);
+        const footHL = footLeft.add([k.rect(9 * s, 2 * s, { radius: 1 * s }), k.pos(0, 2 * s), k.anchor('top'), k.color(255, 255, 255), k.opacity(0.1), k.z(10.1)]);
+        const footHR = footRight.add([k.rect(9 * s, 2 * s, { radius: 1 * s }), k.pos(0, 2 * s), k.anchor('top'), k.color(255, 255, 255), k.opacity(0.1), k.z(10.1)]);
+        const c = {
+          root,
+          body,
+          head,
+          hair,
+          hairBack,
+          neck,
+          belt,
+          harness: harnessL,
+          legLoopLeft,
+          legLoopRight,
+          legLeft,
+          legRight,
+          footLeft,
+          footRight,
+          armLeft,
+          armRight,
+          rope,
+          side: 'left',
+          jitterTime: 0,
+          leftX,
+          rightX,
+          baseY: baseY,
+          armReachLeft: 0,
+          armReachRight: 0,
+          headRadius,
+          scale: s,
+        };
         k.onUpdate(() => {
           const t = k.time();
-          const sway = Math.sin(t * 2) * 1.3; body.angle = sway; rope.angle = sway * 0.6;
-          const breathe = Math.sin(Math.PI * t); const breathOffset = breathe * 2; const headTilt = Math.sin(t*2.6)*3; const headSwayX = Math.sin(t*1.8)*1.2;
-          c.jitterTime += k.dt(); const rp = c.root.pos;
+          const sway = Math.sin(t * 2) * 1.3;
+          body.angle = body.angle ?? 0;
+          rope.angle = rope.angle ?? 0;
+          body.angle = sway;
+          rope.angle = sway * 0.6;
+          const breathe = Math.sin(Math.PI * t);
+          const breathOffset = breathe * 2;
+          const headTilt = Math.sin(t * 2.6) * 3;
+          const headSwayX = Math.sin(t * 1.8) * 1.2;
+          c.jitterTime += k.dt();
+          const j = Math.sin(c.jitterTime * 18) * 0.8;
+          const rp = c.root.pos;
           body.pos = k.vec2(rp.x, rp.y + breathOffset);
-          neck.pos = k.vec2(rp.x, rp.y + breathOffset - (bodyH/2 + 6*s));
-          head.pos = k.vec2(rp.x + headSwayX, rp.y + breathOffset - (bodyH/2 + 14*s)); head.angle = headTilt;
-          hair.pos = k.vec2(rp.x - 2*s + headSwayX*0.6, rp.y + breathOffset - (bodyH/2 + 16*s)); hair.angle = headTilt*0.9;
-          belt.pos = k.vec2(rp.x, rp.y + breathOffset + bodyH/2 - 7*s);
-          legLeft.pos = k.vec2(rp.x - 7*s, rp.y + bodyH/2); legRight.pos = k.vec2(rp.x + 7*s, rp.y + bodyH/2);
-          footLeft.pos = k.vec2(rp.x - 7*s, rp.y + bodyH/2 + 28*s); footRight.pos = k.vec2(rp.x + 7*s, rp.y + bodyH/2 + 28*s);
-          // Arms follow torso/base
-          const armsBaseY = rp.y + breathOffset - (bodyH/2);
-          armLeft.pos = k.vec2(rp.x - 12*s, armsBaseY);
-          armRight.pos = k.vec2(rp.x + 12*s, armsBaseY);
-          // Rope follows torso/base
-          rope.pos = k.vec2(rp.x, rp.y + breathOffset*0.5 - 36*s); rope.height = Math.max(rope.height ?? 0, k.height()*2);
+          neck.pos = k.vec2(rp.x, rp.y + breathOffset - (bodyH / 2 + 3.5 * s));
+          head.pos = k.vec2(rp.x + headSwayX, rp.y + breathOffset - (bodyH / 2 + 14 * s));
+          head.angle = headTilt;
+          hair.pos = k.vec2(rp.x - 2 * s + headSwayX * 0.6, rp.y + breathOffset - (bodyH / 2 + 16 * s));
+          hair.angle = headTilt * 0.9;
+          hairBack.pos = k.vec2(rp.x - 1 * s + headSwayX * 0.4, rp.y + breathOffset - (bodyH / 2 + 14 * s) + 3 * s);
+          hairBack.angle = headTilt * 0.6;
+          belt.pos = k.vec2(rp.x, rp.y + breathOffset + bodyH / 2 - 7 * s);
+          harnessL.pos = k.vec2(rp.x - 6 * s, rp.y + breathOffset + bodyH / 2 - 2 * s);
+          harnessR.pos = k.vec2(rp.x + 6 * s, rp.y + breathOffset + bodyH / 2 - 2 * s);
+          legLeft.pos = k.vec2(rp.x - 7 * s, rp.y + bodyH / 2);
+          legRight.pos = k.vec2(rp.x + 7 * s, rp.y + bodyH / 2);
+          const legTopY = rp.y + bodyH / 2;
+          const kneeY = legTopY + 16 * s;
+          const hipY = legTopY - 2 * s;
+          const kneeToHipT = 4 / 7;
+          const loopY = kneeY + kneeToHipT * (hipY - kneeY);
+          legLoopLeft.pos = k.vec2(rp.x - 7 * s, loopY);
+          legLoopRight.pos = k.vec2(rp.x + 7 * s, loopY);
+          footLeft.pos = k.vec2(rp.x - 7 * s, rp.y + bodyH / 2 + 28 * s);
+          footRight.pos = k.vec2(rp.x + 7 * s, rp.y + bodyH / 2 + 28 * s);
+          rope.pos = k.vec2(rp.x, rp.y + breathOffset * 0.5 - 36 * s);
+          rope.height = Math.max(rope.height ?? 0, k.height() * 2);
+          const leftJit = c.side === 'left' ? j : 0;
+          const rightJit = c.side === 'right' ? j : 0;
+          const isReaching = (c.armReachLeft > 0.1) || (c.armReachRight > 0.1);
+          const isArmAngled = Math.abs((c.armLeft.angle ?? 0)) > 5 || Math.abs((c.armRight.angle ?? 0)) > 5;
+          const isLegMoving = Math.abs((c.legLeft.angle ?? 0)) > 2 || Math.abs((c.legRight.angle ?? 0)) > 2;
+          const allowBreath = !(isReaching || isArmAngled || isLegMoving);
+          const shoulderBaseY = rp.y - bodyH / 2;
+          const breathY = allowBreath ? breathOffset * 0.4 : 0;
+          const armsBaseY = shoulderBaseY + breathY;
+          c.armLeft.pos = k.vec2(rp.x - shoulderOffset + leftJit, armsBaseY - c.armReachLeft);
+          c.armRight.pos = k.vec2(rp.x + shoulderOffset + rightJit, armsBaseY - c.armReachRight);
         });
         return c;
       }
-
-      function defineMenuScene(k) {
-        k.scene('menu', () => {
-          setControlsVisible(false);
-          const viewW = k.width(); const viewH = k.height(); const wallCenterX = viewW/2;
-          spawnBackground(k, k.vec2(viewW, viewH), { treeClip: { centerX: wallCenterX, width: GAME_CONFIG.wall.width } });
-          const bandH = Math.floor(viewH/7); spawnRockWall(k, wallCenterX, viewH, GAME_CONFIG.wall.width, bandH);
-
-          const baseScale = 1.8 * 1.10; const startScale = baseScale * 1.3; const s = startScale; const bodyH = 30*s;
-          const footStack = bodyH/2 + 34*s; const platformTopY = viewH - 110; const heroBaseY = platformTopY - footStack;
-          const hero = spawnClimber(k, wallCenterX, heroBaseY, startScale); try{ hero.hair.z = 12; }catch{}
-
-          // Idle actions
-          let isActing = false; let cooldown = 1.5 + Math.random()*1.5; const scheduleNext = () => cooldown = 2 + Math.random()*3;
-          const easings = k.easings;
-          const neutralPose = () => { const rp = hero.root.pos; const armsBaseY = rp.y - bodyH/2 + 4*s; hero.armLeft.pos = k.vec2(rp.x - 11*s, armsBaseY); hero.armRight.pos = k.vec2(rp.x + 11*s, armsBaseY); hero.armLeft.angle = 190; hero.armRight.angle = 170; hero.head.angle = 0; hero.hair.angle = 0; hero.body.angle = 0; };
-          function waveOnce(side){ isActing = true; const arm = side==='left'? hero.armLeft: hero.armRight; const rp = hero.root.pos; const yBase = rp.y - bodyH/2 + 4*s; const xOff = side==='left'? -11*s : 11*s; const raiseA = side==='left'? -20:20; const highA = side==='left'? -50:50; (side==='left'? hero.armLeft: hero.armRight).pos = k.vec2(rp.x + xOff, yBase - 6*s); const fromA = arm.angle ?? (side==='left'?190:170); k.tween(fromA, raiseA, 0.18, v=> arm.angle=v, easings.easeOutCubic).then?.(()=>{ k.tween(arm.angle??raiseA, highA, 0.16, v=> arm.angle=v, easings.easeInOutSine).then?.(()=>{ k.tween(arm.angle??highA, raiseA, 0.16, v=> arm.angle=v, easings.easeInOutSine).then?.(()=>{ k.tween(arm.angle??raiseA, side==='left'?190:170, 0.18, v=> arm.angle=v, easings.easeInCubic).then?.(()=>{ isActing=false; scheduleNext(); }); }); }); }); }
-          function stepSide(dir){ isActing = true; const x0=hero.root.pos.x; const x1=x0 + dir*18*s; const half=0.34; k.tween(x0, x1, half, v=> hero.root.pos.x=v, easings.easeInOutSine).then?.(()=>{ k.tween(x1, x0, half, v=> hero.root.pos.x=v, easings.easeInOutSine).then?.(()=>{ isActing=false; scheduleNext(); }); }); const angL0 = hero.legLeft.angle ?? 0; const angR0 = hero.legRight.angle ?? 0; const swing = 12*dir; const swingBack = -12*dir; k.tween(angL0, swing, half, v=> hero.legLeft.angle=v, easings.easeInOutSine).then?.(()=> k.tween(hero.legLeft.angle ?? swing, 0, half, v=> hero.legLeft.angle=v, easings.easeInOutSine)); k.tween(angR0, swingBack, half, v=> hero.legRight.angle=v, easings.easeInOutSine).then?.(()=> k.tween(hero.legRight.angle ?? swingBack, 0, half, v=> hero.legRight.angle=v, easings.easeInOutSine)); }
-          function adjustLegs(){ isActing = true; const l0=hero.legLeft.angle ?? 0; const r0=hero.legRight.angle ?? 0; k.tween(l0, l0+8, 0.18, v=> hero.legLeft.angle=v, easings.easeOutSine).then?.(()=> k.tween(hero.legLeft.angle ?? 0, 0, 0.22, v=> hero.legLeft.angle=v, easings.easeInOutSine)); k.tween(r0, r0-8, 0.18, v=> hero.legRight.angle=v, easings.easeOutSine).then?.(()=> k.tween(hero.legRight.angle ?? 0, 0, 0.22, v=> hero.legRight.angle=v, easings.easeInOutSine).then?.(()=>{ isActing=false; scheduleNext(); })); }
-          function maybeDoIdleAction(dt){ if(isActing) return; cooldown -= dt; if(cooldown>0) return; const r=Math.random(); if(r<0.44) waveOnce(Math.random()<0.5?'right':'left'); else if(r<0.76) stepSide(Math.random()<0.5?-1:1); else adjustLegs(); }
-          k.onUpdate(()=>{ if(!isActing) neutralPose(); maybeDoIdleAction(k.dt()); const rp = hero.root.pos; const legTopL = { x: rp.x - 7*s, y: rp.y + bodyH/2 }; const legTopR = { x: rp.x + 7*s, y: rp.y + bodyH/2 }; const len = 28*s; const rad=(d)=>d*Math.PI/180; const aL=hero.legLeft.angle ?? 0; const aR=hero.legRight.angle ?? 0; hero.footLeft.pos = k.vec2(legTopL.x + Math.sin(rad(aL))*len, legTopL.y + Math.cos(rad(aL))*len); hero.footRight.pos = k.vec2(legTopR.x + Math.sin(rad(aR))*len, legTopR.y + Math.cos(rad(aR))*len); hero.footLeft.angle = aL; hero.footRight.angle = aR; });
-
-          // Rock platform
-          const platformZ = 4.5; const ledgeWidth = Math.min(viewW*0.72, 420); const ledgeHeight = Math.max(30, Math.floor(viewH*0.08)); const ledgeY = platformTopY + ledgeHeight/2;
-          k.add([k.rect(ledgeWidth, ledgeHeight, { radius: 10 }), k.pos(viewW/2, ledgeY), k.anchor('center'), k.color(88,72,64), { z: platformZ }]);
-          k.add([k.rect(ledgeWidth*0.75, ledgeHeight*0.7, { radius: 10 }), k.pos(viewW/2 - ledgeWidth*0.12, ledgeY + ledgeHeight*0.08), k.anchor('center'), k.color(74,60,54), { z: platformZ + 0.01 }]);
-          k.add([k.rect(ledgeWidth*0.46, ledgeHeight*0.5, { radius: 8 }), k.pos(viewW/2 + ledgeWidth*0.08, ledgeY + ledgeHeight*0.25), k.anchor('center'), k.color(64,50,45), { z: platformZ + 0.02 }]);
-
-          // Face
-          const eyeCol = k.rgb(30,30,30); const eyeSize = 3*s; hero.head.add([k.rect(eyeSize, eyeSize, { radius: 1*s }), k.pos(-3*s, -2*s), k.anchor('center'), k.color(eyeCol), k.z(13.5)]); hero.head.add([k.rect(eyeSize, eyeSize, { radius: 1*s }), k.pos(3*s, -2*s), k.anchor('center'), k.color(eyeCol), k.z(13.5)]); hero.head.add([k.rect(7*s, 2*s, { radius: 1*s }), k.pos(0, 4*s), k.anchor('center'), k.color(60,40,40), k.z(13.6)]);
-
-          // Title: wavy "betaspray"
-          const titleStr = 'betaspray'; const baseY = viewH * 0.18; const size = Math.round(64 * (GAME_CONFIG.uiScale ?? 1)); const letterSpacing = Math.round(size*0.12); const blue = k.rgb(28,120,200);
-          const letters=[]; const addOutlinedLetter=(ch)=>{ const root=k.add([k.pos(0,0), k.anchor('center'), { z: 2001 }]); const offs=[[-2,0],[2,0],[0,-2],[0,2],[-2,-2],[2,-2],[-2,2],[2,2]]; offs.forEach(([ox,oy])=> root.add([k.text(ch,{size}), k.pos(ox,oy), k.anchor('center'), k.color(255,255,255)])); const main=root.add([k.text(ch,{size}), k.anchor('center'), k.color(blue)]); return { root, main }; };
-          let totalW=0; const advances=[]; for (const ch of titleStr){ const l=addOutlinedLetter(ch); letters.push(l); const w=(l.main.width ?? size*0.6); const adv=w + letterSpacing; advances.push(adv); totalW += adv; } const startX = viewW/2 - totalW/2; let x = startX; letters.forEach((l,i)=>{ const adv=advances[i]; l.root.pos = k.vec2(x + adv/2, baseY); x += adv; });
-          k.onUpdate(()=>{ const t=k.time(); letters.forEach((l,i)=>{ l.root.pos.y = baseY + Math.sin(t*3 + i*0.5) * (size*0.08); }); });
-
-          // Hint panel
-          k.add([k.rect(viewW*0.92, 66, { radius: 20 }), k.pos(viewW/2, viewH - 36), k.anchor('center'), k.color(60,50,46), k.opacity(0.95), k.z(1999)]);
-          k.add([k.text('Tap Space/Enter to Start', { size: 28, width: viewW - 40, align: 'center' }), k.pos(viewW/2, viewH - 40), k.anchor('center'), k.color(255,255,255), k.z(2000)]);
-
-          function playWithExitAnim(){ if (playWithExitAnim._running) return; playWithExitAnim._running = true; let isActingLocal=true; const eas=easings; const rp=hero.root.pos; const x0=rp.x, x1=wallCenterX; const duration=1.0; k.tween(hero.body.angle ?? 0, 8, duration*0.5, v=> hero.body.angle=v, eas.easeInOutSine); k.tween(hero.armLeft.angle ?? 190, 210, duration*0.5, v=> hero.armLeft.angle=v, eas.easeInOutSine); k.tween(hero.armRight.angle ?? 170, 150, duration*0.5, v=> hero.armRight.angle=v, eas.easeInOutSine); const stepCycles=2; const half=duration/(stepCycles*2); const walkOne=(dir, next)=>{ k.tween(hero.root.pos.x, hero.root.pos.x + dir*6*s, half, v=> hero.root.pos.x=v, eas.easeInOutSine).then?.(()=> k.tween(hero.root.pos.x, hero.root.pos.x - dir*6*s, half, v=> hero.root.pos.x=v, eas.easeInOutSine).then?.(()=> next&&next())); k.tween(hero.legLeft.angle ?? 0, 10*dir, half, v=> hero.legLeft.angle=v, eas.easeOutSine).then?.(()=> k.tween(hero.legLeft.angle ?? 0, 0, half, v=> hero.legLeft.angle=v, eas.easeInSine)); k.tween(hero.legRight.angle ?? 0, -10*dir, half, v=> hero.legRight.angle=v, eas.easeOutSine).then?.(()=> k.tween(hero.legRight.angle ?? 0, 0, half, v=> hero.legRight.angle=v, eas.easeInSine)); };
-          k.tween(x0, x1, duration, v=> hero.root.pos.x=v, eas.easeInOutSine); walkOne(1, ()=> walkOne(-1, ()=> { isActingLocal=false; k.go('game', { autoStart: true }); })); }
-          const start = () => playWithExitAnim(); ['space','enter','left','right','a','d'].forEach(key=> k.onKeyPress(key, start)); k.onClick(start);
-        });
+      function estimateClimberHeightPx(scale) { return 72 * scale; }
+      function reachToSide(k, climber, side) {
+        const targetX = side === 'left' ? climber.leftX : climber.rightX;
+        climber.side = side;
+        const duration = GAME_CONFIG.inputLockMs / 1000;
+        k.tween(climber.root.pos.x, targetX, duration, (v) => (climber.root.pos.x = v), k.easings.easeOutCubic);
+        const reachDur = duration * 0.5;
+        const pullDur = duration * 0.5;
+        const pullHeight = 8;
+        if (side === 'left') {
+          const fromA = climber.armLeft.angle ?? 0;
+          const reachTw = k.tween(fromA, -60, reachDur * 0.8, (v) => (climber.armLeft.angle = v), k.easings.easeOutCubic);
+          reachTw.then?.(() => { k.tween(climber.armLeft.angle, 0, pullDur * 0.8, (v) => (climber.armLeft.angle = v), k.easings.easeOutCubic); });
+          const reachTarget = climber.headRadius * 2;
+          k.tween(climber.armReachLeft, reachTarget, reachDur, (v) => (climber.armReachLeft = v), k.easings.linear).then?.(() => {
+            k.tween(climber.armReachLeft, 0, pullDur, (v) => (climber.armReachLeft = v), k.easings.easeInCubic);
+            const y0 = climber.root.pos.y;
+            k.tween(y0, y0 - pullHeight, pullDur * 0.6, (v) => (climber.root.pos.y = v), k.easings.easeOutCubic).then?.(() => {
+              k.tween(climber.root.pos.y, y0, pullDur * 0.4, (v) => (climber.root.pos.y = v), k.easings.easeInCubic);
+            });
+          });
+        } else {
+          const fromA = climber.armRight.angle ?? 0;
+          const reachTw = k.tween(fromA, 60, reachDur * 0.8, (v) => (climber.armRight.angle = v), k.easings.easeOutCubic);
+          reachTw.then?.(() => { k.tween(climber.armRight.angle, 0, pullDur * 0.8, (v) => (climber.armRight.angle = v), k.easings.easeOutCubic); });
+          const reachTarget = climber.headRadius * 2;
+          k.tween(climber.armReachRight, reachTarget, reachDur, (v) => (climber.armReachRight = v), k.easings.linear).then?.(() => {
+            k.tween(climber.armReachRight, 0, pullDur, (v) => (climber.armReachRight = v), k.easings.easeInCubic);
+            const y0 = climber.root.pos.y;
+            k.tween(y0, y0 - pullHeight, pullDur * 0.6, (v) => (climber.root.pos.y = v), k.easings.easeOutCubic).then?.(() => {
+              k.tween(climber.root.pos.y, y0, pullDur * 0.4, (v) => (climber.root.pos.y = v), k.easings.easeInCubic);
+            });
+          });
+        }
       }
 
+      // -------------------- scenes/game.ts --------------------
       function defineGameScene(k) {
         k.scene('game', (opts) => {
-          setControlsVisible(true);
-          const viewW = k.width(), viewH = k.height(); const wallCenterX = viewW/2; spawnBackground(k, k.vec2(viewW, viewH), { treeClip: { centerX: wallCenterX, width: GAME_CONFIG.wall.width } }); const wallTop=50; const wallBottom=viewH-40; const climberScale = 1.15*1.10; const segmentH = Math.max(50, Math.floor(viewH/7)); const numSegmentsOnScreen = Math.ceil((wallBottom - wallTop) / segmentH) + 2; const INDICATOR_RADIUS=10; const INDICATOR_Y_RATIO=-0.25; const rock=spawnRockWall(k, wallCenterX, viewH, GAME_CONFIG.wall.width, segmentH);
-
-          const obstaclesLayer = k.add([k.pos(0,0), k.z(1)]);
-          // simple obstacle sequence (alternating)
-          const segments = []; for (let i=0;i<numSegmentsOnScreen+6;i++) segments.push({ side: i%2===0? 'left':'right' });
-
-          // HUD: narrower centered time bar
-          const padding=10; const scoreText=k.add([k.text('0', { size: Math.round(24*(GAME_CONFIG.uiScale||1)), font:'sink' }), k.pos(padding, padding), k.z(4000), k.color(255,255,255)]); const fullWidth=k.width()-padding*2; const barWidth=Math.floor(fullWidth*0.85); const barHeight=10; const bgX=Math.floor((k.width()-barWidth)/2); k.add([k.rect(barWidth, barHeight), k.pos(bgX, padding+30), k.color(255,255,255), k.opacity(0.12), k.z(4000)]); const timeBar=k.add([k.rect(barWidth, barHeight), k.pos(bgX, padding+30), k.color(80,200,120), k.z(4001)]); timeBar.fullWidth=barWidth; const setTime=(t)=>{ const frac=Math.max(0, Math.min(1, t / GAME_CONFIG.timeBar.maxSeconds)); timeBar.width = timeBar.fullWidth * frac; timeBar.color = frac < GAME_CONFIG.timeBar.dangerThreshold ? k.rgb(230,70,70) : k.rgb(80,200,120); };
-
-          let score=0; let timeRemaining=GAME_CONFIG.timeBar.maxSeconds; setTime(timeRemaining); const setScore=(s)=>{ scoreText.text = `${s}`; };
-
-          const climber = spawnClimber(k, wallCenterX, wallBottom - segmentH*1.2 + (viewH*0.10) - 50, climberScale);
-
-          // draw indicators
-          const nodes=[]; let hasSkippedFirstIndicator=false; function drawSegments(){ nodes.forEach(n=> n.destroy()); nodes.length=0; for (let i=0;i<numSegmentsOnScreen+2;i++){ const seg=segments[i]; if(!seg||!seg.side) continue; const baseY=wallBottom - i*segmentH - segmentH/2; const yPos = baseY + INDICATOR_Y_RATIO*segmentH - viewH*0.10; const xPos = rock.laneXAt(yPos, seg.side); if(!hasSkippedFirstIndicator){ hasSkippedFirstIndicator=true; continue; } nodes.push(obstaclesLayer.add([k.circle(INDICATOR_RADIUS), k.pos(xPos,yPos), k.anchor('center'), k.color(230,60,60), k.opacity(0.95), k.z(1.2)])); } } drawSegments();
-
-          function handleMove(side){
-            const nextSide = segments[0]?.side;
-            // Wrong input ends the game immediately
-            if (nextSide && nextSide !== side) {
-              try { if (navigator.vibrate) navigator.vibrate(30); } catch {}
-              detachInput();
-              k.go('menu');
-              return;
-            }
-            // Correct input: animate, score, scroll
-            const targetX = side==='left' ? rock.laneXAt(k.height()*0.45,'left') : rock.laneXAt(k.height()*0.45,'right');
-            k.tween(climber.root.pos.x, targetX, 0.12, (v)=> (climber.root.pos.x=v), k.easings.easeOutCubic);
-            const arm = side==='left'? climber.armLeft : climber.armRight; const fromA = arm.angle ?? (side==='left'? -20 : 20);
-            k.tween(fromA, side==='left'? -60:60, 0.08, (v)=> (arm.angle=v), k.easings.easeOutCubic).then?.(()=> k.tween(arm.angle ?? 0, 0, 0.12, (v)=> (arm.angle=v), k.easings.easeInCubic));
-            score += 1; setScore(score);
-            timeRemaining = Math.min(GAME_CONFIG.timeBar.maxSeconds, timeRemaining + GAME_CONFIG.timeBar.refillOnStepSeconds);
-            segments.shift(); segments.push({ side: Math.random()<0.5? 'left':'right' });
-            drawSegments();
+          const viewW = k.width();
+          const viewH = k.height();
+          const wallCenterX = viewW / 2;
+          spawnBackground(k, k.vec2(viewW, viewH), { treeClip: { centerX: wallCenterX, width: GAME_CONFIG.wall.width } });
+          const wallTop = 50;
+          const wallBottom = viewH - 40;
+          const climberScale = 1.15 * 1.10;
+          const climberHeight = estimateClimberHeightPx(climberScale);
+          const segmentH = Math.max(50, Math.floor(viewH / 7));
+          const numSegmentsOnScreen = Math.ceil((wallBottom - wallTop) / segmentH) + 2;
+          const INDICATOR_RADIUS = 10;
+          const INDICATOR_Y_RATIO = -0.25;
+          const rock = spawnRockWall(k, wallCenterX, viewH, GAME_CONFIG.wall.width, segmentH);
+          const obstaclesLayer = k.add([k.pos(0, 0), k.z(1)]);
+          const rngState = createObstacleState();
+          const initialSegments = seedInitialSegments(numSegmentsOnScreen + 5, rngState.rng);
+          let state = {
+            phase: 'READY',
+            score: 0,
+            best: loadBest(),
+            timeRemaining: GAME_CONFIG.timeBar.maxSeconds,
+            playerSide: 'left',
+            segments: initialSegments,
+            sameSideRun: 0,
+            lastObstacleSide: null,
+            inputLockedUntilMs: 0,
+          };
+          const hud = createHud(k);
+          hud.setTime(state.timeRemaining);
+          hud.setScore(0, state.best);
+          function createCircleButton(label, x, y, radius, z, onClick) {
+            const root = k.add([k.pos(x, y), k.anchor('center'), k.z(z)]);
+            const baseCol = k.rgb(180, 180, 180);
+            const hoverCol = k.rgb(220, 220, 220);
+            const textCol = k.rgb(40, 40, 40);
+            const bg = root.add([k.circle(radius), k.color(baseCol), k.opacity(0.9), k.area()]);
+            const size = Math.round(radius * 0.9 * (GAME_CONFIG.uiScale ?? 1));
+            const tx = root.add([k.text(label, { size, width: radius * 1.6, align: 'center' }), k.anchor('center'), k.color(textCol)]);
+            bg.onClick?.(onClick);
+            bg.onHover?.(() => { bg.color = hoverCol; });
+            bg.onHoverEnd?.(() => { bg.color = baseCol; });
+            return { root, bg, tx };
           }
-
-          const detachInput = setupInput(k, { onMove: handleMove, onStart: ()=>{} });
-          k.onSceneLeave(() => { setControlsVisible(false); });
-          // Also wire mobile buttons explicitly (already hooked in setupInput)
-          if (opts && opts.autoStart) {}
-
-          // Timer with difficulty ramp + cap
-          k.onUpdate(()=>{ const dt=Math.min(GAME_CONFIG.maxDtSeconds, k.dt()); let drain = dt; const ramp = Math.min(1.8, 0.015 * score); drain *= 1 + ramp; const full = GAME_CONFIG.timeBar.maxSeconds; const maxPerSecond = full / 0.5; const maxDrain = (maxPerSecond * dt) / full; drain = Math.min(drain, maxDrain); timeRemaining -= drain; setTime(timeRemaining); if (timeRemaining <= 0) { detachInput(); k.go('menu'); } });
+          const pauseBtn = createCircleButton('II', viewW - 28, 28, 18, 1500, () => {
+            if (state.phase === 'PLAY') setPhase('PAUSED');
+          });
+          let resumeBtn = null;
+          let menuBtn = null;
+          let replayBtn = null;
+          let pauseTitle = null;
+          function destroyPauseMenu() {
+            resumeBtn?.root?.destroy();
+            menuBtn?.root?.destroy();
+            replayBtn?.root?.destroy();
+            pauseTitle?.destroy();
+            resumeBtn = null; menuBtn = null; replayBtn = null; pauseTitle = null;
+          }
+          const climberBaseY = wallBottom - segmentH * 1.2 + (viewH * 0.10) - 50;
+          const climber = spawnClimber(k, wallCenterX, climberBaseY, climberScale);
+          const segmentNodes = [];
+          let currentIndicator = null;
+          function drawSegments() {
+            for (const n of segmentNodes) n.destroy();
+            segmentNodes.length = 0;
+            const nextIdx = getNextSegmentIndex();
+            for (let i = 0; i < numSegmentsOnScreen + 2; i++) {
+              const seg = state.segments[i];
+              if (!seg || !seg.side) continue;
+              const baseY = wallBottom - i * segmentH - segmentH / 2;
+              let yPos = baseY + INDICATOR_Y_RATIO * segmentH - viewH * 0.10;
+              const xPos = rock.laneXAt(yPos, seg.side);
+              const c = obstaclesLayer.add([k.circle(INDICATOR_RADIUS), k.pos(xPos, yPos), k.anchor('center'), k.color(230, 60, 60), k.opacity(0.95), k.z(1.2)]);
+              segmentNodes.push(c);
+              if (i === nextIdx) currentIndicator = c;
+            }
+          }
+          drawSegments();
+          function getTargetY() {
+            const s = climber.scale ?? 1;
+            const reachTarget = climber.headRadius * 2;
+            const armBase = 18 * s;
+            const holdOffset = armBase + reachTarget * 0.9;
+            return climber.root.pos.y - holdOffset;
+          }
+          function getNextSegmentIndex() {
+            const targetY = getTargetY();
+            let bestIdx = 0;
+            let bestDelta = Number.POSITIVE_INFINITY;
+            for (let i = 0; i < state.segments.length; i++) {
+              const seg = state.segments[i];
+              if (!seg || !seg.side) continue;
+              const baseY = wallBottom - i * segmentH - segmentH / 2;
+              const yPos = baseY + INDICATOR_Y_RATIO * segmentH - viewH * 0.10;
+              const delta = targetY - yPos;
+              if (delta > 0 && delta < bestDelta) { bestDelta = delta; bestIdx = i; }
+            }
+            return bestIdx;
+          }
+          const overlay = k.add([ k.rect(viewW, viewH), k.pos(0, 0), k.color(0, 0, 0), k.opacity(0.25), k.z(3000) ]);
+          const overlayText = k.add([
+            k.text('Tap Space/Enter to Start', { size: 24, width: viewW - 40, align: 'center' }),
+            k.pos(viewW / 2, viewH / 2),
+            k.anchor('center'),
+            k.z(3001),
+            k.color(255, 255, 255),
+          ]);
+          function setPhase(phase, reason) {
+            state.phase = phase;
+            if (phase === 'READY') {
+              overlay.hidden = false; overlayText.hidden = false; overlayText.text = 'Tap Space/Enter to Start'; showMobileControls();
+            } else if (phase === 'PLAY') {
+              overlay.hidden = true; overlayText.hidden = true; destroyPauseMenu(); showMobileControls();
+            } else if (phase === 'OVER') {
+              overlay.hidden = false; overlayText.hidden = false;
+              const best = Math.max(state.best, state.score);
+              if (best !== state.best) { state.best = best; saveBest(best); }
+              const wrong = reason && reason.toLowerCase().includes('wrong') ? "Wrong beta! But I'm not here to spray you..." : (reason ?? 'Pumped out!');
+              overlayText.text = `${wrong}\nScore ${state.score}  •  Best ${state.best}\nPress Space/Enter to Replay`;
+              replayBtn?.root?.destroy();
+              const y = viewH / 2 + 80;
+              replayBtn = createCircleButton('↻', viewW / 2, y, 24, 3100, () => { handleStart(); });
+              showMobileControls();
+            } else if (phase === 'PAUSED') {
+              overlay.hidden = false; overlayText.hidden = true; showPauseMenu(); hideMobileControls();
+            }
+          }
+          function refillTime() {
+            state.timeRemaining = Math.min(GAME_CONFIG.timeBar.maxSeconds, state.timeRemaining + GAME_CONFIG.timeBar.refillOnStepSeconds);
+            hud.setTime(state.timeRemaining);
+          }
+          let isScrolling = false;
+          function scrollUp() {
+            if (isScrolling) return; isScrolling = true;
+            const duration = 0.15;
+            const startY = obstaclesLayer.pos.y;
+            const tw = k.tween(startY, startY + segmentH, duration, (v) => (obstaclesLayer.pos.y = v), k.easings.linear);
+            const rockTw = rock.scrollOnce(duration);
+            tw.then?.(() => {
+              obstaclesLayer.pos.y = 0;
+              state.segments.shift();
+              const n = nextObstacle(state.score, state.lastObstacleSide, state.sameSideRun, rngState.rng);
+              state.segments.push({ side: n.side });
+              state.lastObstacleSide = n.newLast;
+              state.sameSideRun = n.newRun;
+              drawSegments();
+              isScrolling = false;
+            });
+          }
+          function handleMove(side) {
+            if (state.phase !== 'PLAY') return;
+            if (isScrolling) return;
+            const now = performance.now();
+            if (now < state.inputLockedUntilMs) return;
+            state.inputLockedUntilMs = now + GAME_CONFIG.inputLockMs;
+            const nextSeg = state.segments[getNextSegmentIndex()];
+            if (nextSeg && nextSeg.side !== side) { setPhase('OVER', `Wrong hold — use ${nextSeg.side}!`); return; }
+            state.playerSide = side;
+            reachToSide(k, climber, side);
+            state.score += 1;
+            hud.setScore(state.score, state.best);
+            refillTime();
+            if (navigator.vibrate) navigator.vibrate(15);
+            scrollUp();
+          }
+          function handleStart() {
+            if (state.phase === 'READY' || state.phase === 'OVER') {
+              state.score = 0;
+              state.timeRemaining = GAME_CONFIG.timeBar.maxSeconds;
+              state.playerSide = 'left';
+              state.segments = seedInitialSegments(numSegmentsOnScreen + 5, rngState.rng);
+              state.sameSideRun = 0;
+              state.lastObstacleSide = null;
+              hud.setScore(0, state.best);
+              hud.setTime(state.timeRemaining);
+              drawSegments();
+              setPhase('PLAY');
+            }
+          }
+          const detachInput = setupInput(k, { onMove: handleMove, onStart: handleStart });
+          if (opts?.autoStart) setPhase('PLAY');
+          k.onUpdate(() => {
+            if (state.phase !== 'PLAY') return;
+            const dt = Math.min(GAME_CONFIG.maxDtSeconds, k.dt());
+            let drain = dt;
+            const ramp = Math.min(1.8, 0.015 * state.score);
+            drain *= 1 + ramp;
+            const current = state.timeRemaining;
+            const full = GAME_CONFIG.timeBar.maxSeconds;
+            const maxPerSecond = full / 0.5;
+            const maxDrain = (maxPerSecond * dt) / full;
+            drain = Math.min(drain, maxDrain);
+            state.timeRemaining -= drain;
+            hud.setTime(state.timeRemaining);
+            if (state.timeRemaining <= 0) { setPhase('OVER', 'Pumped out!'); }
+          });
+          function showPauseMenu() {
+            if (resumeBtn) return;
+            pauseTitle = k.add([k.text('Paused', { size: 30 }), k.pos(viewW / 2, viewH / 2 - 120), k.anchor('center'), k.color(255, 255, 255), k.z(2100)]);
+            resumeBtn = createCircleButton('▶', viewW / 2, viewH / 2 - 30, 24, 2100, () => setPhase('PLAY'));
+            menuBtn = createCircleButton('⌂', viewW / 2, viewH / 2 + 30, 22, 2100, () => k.go('menu'));
+          }
+          k.onSceneLeave(() => { detachInput(); hideMobileControls(); });
         });
       }
 
+      // -------------------- scenes/menu.ts --------------------
+      function defineMenuScene(k) {
+        k.scene('menu', () => {
+          hideMobileControls();
+          const viewW = k.width();
+          const viewH = k.height();
+          const wallCenterX = viewW / 2;
+          spawnBackground(k, k.vec2(viewW, viewH), { treeClip: { centerX: wallCenterX, width: GAME_CONFIG.wall.width } });
+          const bandH = Math.floor(viewH / 7);
+          spawnRockWall(k, wallCenterX, viewH, GAME_CONFIG.wall.width, bandH);
+          const baseScale = 1.8 * 1.10;
+          const startScale = baseScale * 1.3;
+          const s = startScale;
+          const bodyH = 30 * s;
+          const footStack = bodyH / 2 + 34 * s;
+          const platformTopY = viewH - 110;
+          const heroBaseY = platformTopY - footStack;
+          const hero = spawnClimber(k, wallCenterX, heroBaseY, startScale);
+          try { hero.hair.z = 12; } catch {}
+          const sprayCans = [];
+          function createSprayCan(x) {
+            const canZ = 5.5;
+            const bodyW = 8 * s;
+            const bodyH = 14 * s;
+            const yTop = platformTopY;
+            const root = k.add([k.pos(x, yTop), k.anchor('bot'), { z: canZ, _isCan: true }]);
+            root.add([k.rect(bodyW, bodyH, { radius: 2 * s }), k.pos(0, 0), k.anchor('bot'), k.color(210, 214, 220)]);
+            root.add([k.rect(bodyW * 0.95, bodyH * 0.35, { radius: 1 * s }), k.pos(0, -bodyH * 0.5), k.anchor('center'), k.color(60, 140, 220)]);
+            root.add([k.rect(bodyW * 0.9, 3 * s, { radius: 1 * s }), k.pos(0, 0), k.anchor('bot'), k.color(180, 185, 192)]);
+            root.add([k.rect(2 * s, 2 * s, { radius: 0.5 * s }), k.pos(bodyW * 0.45, -bodyH + 2.5 * s), k.anchor('center'), k.color(250, 250, 250)]);
+            root.add([k.rect(2 * s, 2 * s, { radius: 0.5 * s }), k.pos(bodyW * 0.45, -bodyH + 4.2 * s), k.anchor('center'), k.color(230, 230, 230)]);
+            root.add([k.rect(bodyW * 0.18, bodyH * 0.8, { radius: 1 * s }), k.pos(-bodyW * 0.32, -bodyH * 0.5), k.anchor('center'), k.color(255, 255, 255), k.opacity(0.18)]);
+            return root;
+          }
+          (function placeSprayCansOnFloor() {
+            const offsets = [-60 * s, -45 * s];
+            for (const off of offsets) { const can = createSprayCan(wallCenterX + off); sprayCans.push(can); }
+          })();
+          function pickupAndSpray() {
+            if (!sprayCans.length) return;
+            isActing = true;
+            const hx = hero.root.pos.x;
+            let nearest = sprayCans[0];
+            let best = Math.abs(hx - nearest.pos.x);
+            for (const c of sprayCans) { const d = Math.abs(hx - c.pos.x); if (d < best) { nearest = c; best = d; } }
+            nearest.hidden = true;
+            const arm = hero.armRight;
+            const canZ = 12.6;
+            const bodyW = 8 * s, bodyH = 14 * s;
+            const handY = -28 * s;
+            const tempRoot = arm.add([k.pos(0, handY), k.anchor('top'), { z: canZ }]);
+            k.onUpdate(() => {
+              const breathe = Math.sin(Math.PI * k.time());
+              const breathOffset = breathe * 2 * 0.6;
+              const rp = hero.root.pos;
+              const armsBaseY = rp.y + breathOffset - bodyH / 2;
+              hero.armLeft.pos.y = armsBaseY - (hero.armReachLeft ?? 0);
+              hero.armRight.pos.y = armsBaseY - (hero.armReachRight ?? 0);
+            });
+            tempRoot.add([k.rect(bodyW, bodyH, { radius: 2 * s }), k.pos(0, 0), k.anchor('top'), k.color(210, 214, 220)]);
+            tempRoot.add([k.rect(bodyW * 0.95, bodyH * 0.35, { radius: 1 * s }), k.pos(0, bodyH * 0.35), k.anchor('center'), k.color(60, 140, 220)]);
+            tempRoot.add([k.rect(bodyW * 0.9, 3 * s, { radius: 1 * s }), k.pos(0, 0), k.anchor('top'), k.color(180, 185, 192)]);
+            const nozzle = tempRoot.add([k.rect(2 * s, 2 * s, { radius: 0.5 * s }), k.pos(bodyW * 0.55, 1.5 * s), k.anchor('center'), k.color(250, 250, 250)]);
+            tempRoot.add([k.rect(2 * s, 2 * s, { radius: 0.5 * s }), k.pos(bodyW * 0.55, 3.2 * s), k.anchor('center'), k.color(230, 230, 230)]);
+            tempRoot.add([k.rect(bodyW * 0.18, bodyH * 0.8, { radius: 1 * s }), k.pos(-bodyW * 0.32, bodyH * 0.4), k.anchor('center'), k.color(255, 255, 255), k.opacity(0.18)]);
+            const tiltFrom = arm.angle ?? 170;
+            const tiltTo = 140;
+            const easings = k.easings;
+            k.tween(tiltFrom, tiltTo, 0.8, (v) => (arm.angle = v), easings.easeOutCubic).then?.(() => {
+              const emitBurst = () => {
+                const burstCount = 10;
+                for (let i = 0; i < burstCount; i++) {
+                  const baseDeg = -40;
+                  const jitter = (Math.random() * 20 - 10);
+                  const angle = (baseDeg + jitter) * (Math.PI / 180);
+                  const speed = 90 + Math.random() * 90;
+                  const life = 1.0 + Math.random() * 0.6;
+                  const p = tempRoot.add([
+                    k.rect(3, 2, { radius: 1 }),
+                    k.pos(nozzle.pos.x, nozzle.pos.y),
+                    k.anchor('center'),
+                    k.color(240, 244, 248),
+                    k.opacity(0.9),
+                    { vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, t: 0, life },
+                  ]);
+                  k.onUpdate(() => {
+                    if (!p.exists()) return;
+                    p.t += k.dt();
+                    p.pos.x += p.vx * k.dt();
+                    p.pos.y += p.vy * k.dt();
+                    p.opacity = Math.max(0, 0.9 * (1 - p.t / life));
+                    if (p.t >= life) p.destroy();
+                  });
+                }
+              };
+              const sprayWindow = 1.4;
+              for (let a = 0; a <= sprayWindow; a += 0.2) { k.wait(a, emitBurst); }
+              k.wait(sprayWindow, () => {
+                k.tween(arm.angle ?? tiltTo, 170, 0.8, (v) => (arm.angle = v), easings.easeInCubic).then?.(() => {
+                  tempRoot.destroy();
+                  nearest.hidden = false;
+                  isActing = false; scheduleNext();
+                });
+              });
+            });
+          }
+          let isActing = false;
+          let cooldown = 1.5 + Math.random() * 1.5;
+          const scheduleNext = () => { cooldown = 2 + Math.random() * 3; };
+          const easings = k.easings;
+          const neutralPose = () => {
+            const rp = hero.root.pos;
+            const armsBaseY = rp.y - bodyH / 2 + 4 * s;
+            hero.armLeft.pos = k.vec2(rp.x - 11 * s, armsBaseY);
+            hero.armRight.pos = k.vec2(rp.x + 11 * s, armsBaseY);
+            hero.armLeft.angle = 190;
+            hero.armRight.angle = 170;
+            hero.head.angle = 0; hero.hair.angle = 0; hero.body.angle = 0;
+          };
+          function waveOnce(side) {
+            isActing = true;
+            const arm = side === 'left' ? hero.armLeft : hero.armRight;
+            const rp = hero.root.pos;
+            const yBase = rp.y - bodyH / 2 + 4 * s;
+            const xOff = side === 'left' ? -11 * s : 11 * s;
+            const raiseA = side === 'left' ? -20 : 20;
+            const highA = side === 'left' ? -50 : 50;
+            hero[side === 'left' ? 'armLeft' : 'armRight'].pos = k.vec2(rp.x + xOff, yBase - 6 * s);
+            const fromA = arm.angle ?? (side === 'left' ? 190 : 170);
+            const tw1 = k.tween(fromA, raiseA, 0.18, (v) => (arm.angle = v), easings.easeOutCubic);
+            tw1.then?.(() => {
+              const tw2 = k.tween(arm.angle ?? raiseA, highA, 0.16, (v) => (arm.angle = v), easings.easeInOutSine);
+              tw2.then?.(() => {
+                const tw3 = k.tween(arm.angle ?? highA, raiseA, 0.16, (v) => (arm.angle = v), easings.easeInOutSine);
+                tw3.then?.(() => {
+                  const tw4 = k.tween(arm.angle ?? raiseA, side === 'left' ? 190 : 170, 0.18, (v) => (arm.angle = v), easings.easeInCubic);
+                  tw4.then?.(() => { isActing = false; scheduleNext(); });
+                });
+              });
+            });
+          }
+          function stepSide(dir) {
+            isActing = true;
+            const x0 = hero.root.pos.x;
+            const x1 = x0 + dir * 18 * s;
+            const half = 0.34;
+            const tw = k.tween(x0, x1, half, (v) => (hero.root.pos.x = v), easings.easeInOutSine);
+            tw.then?.(() => { k.tween(x1, x0, half, (v) => (hero.root.pos.x = v), easings.easeInOutSine).then?.(() => { isActing = false; scheduleNext(); }); });
+            const angL0 = hero.legLeft.angle ?? 0;
+            const angR0 = hero.legRight.angle ?? 0;
+            const swing = 12 * (dir);
+            const swingBack = -12 * (dir);
+            k.tween(angL0, swing, half, (v) => (hero.legLeft.angle = v), easings.easeInOutSine).then?.(() => {
+              k.tween(hero.legLeft.angle ?? swing, 0, half, (v) => (hero.legLeft.angle = v), easings.easeInOutSine);
+            });
+            k.tween(angR0, swingBack, half, (v) => (hero.legRight.angle = v), easings.easeInOutSine).then?.(() => {
+              k.tween(hero.legRight.angle ?? swingBack, 0, half, (v) => (hero.legRight.angle = v), easings.easeInOutSine);
+            });
+          }
+          function adjustLegs() {
+            isActing = true;
+            const l0 = hero.legLeft.angle ?? 0;
+            const r0 = hero.legRight.angle ?? 0;
+            const twA = k.tween(l0, l0 + 8, 0.18, (v) => (hero.legLeft.angle = v), easings.easeOutSine);
+            const twB = k.tween(r0, r0 - 8, 0.18, (v) => (hero.legRight.angle = v), easings.easeOutSine);
+            twA.then?.(() => { k.tween(hero.legLeft.angle ?? 0, 0, 0.22, (v) => (hero.legLeft.angle = v), easings.easeInOutSine); });
+            twB.then?.(() => { k.tween(hero.legRight.angle ?? 0, 0, 0.22, (v) => (hero.legRight.angle = v), easings.easeInOutSine).then?.(() => { isActing = false; scheduleNext(); }); });
+          }
+          function maybeDoIdleAction(dt) {
+            if (isActing) return;
+            cooldown -= dt;
+            if (cooldown > 0) return;
+            const r = Math.random();
+            if (r < 0.35) waveOnce(Math.random() < 0.5 ? 'right' : 'left');
+            else if (r < 0.6) stepSide(Math.random() < 0.5 ? -1 : 1);
+            else if (r < 0.8) adjustLegs();
+            else pickupAndSpray();
+          }
+          k.onUpdate(() => {
+            if (!isActing) neutralPose();
+            maybeDoIdleAction(k.dt());
+            const rp = hero.root.pos;
+            const legTopL = { x: rp.x - 7 * s, y: rp.y + bodyH / 2 };
+            const legTopR = { x: rp.x + 7 * s, y: rp.y + bodyH / 2 };
+            const len = 28 * s;
+            const deg2rad = (d) => (d * Math.PI) / 180;
+            const aL = (hero.legLeft.angle ?? 0);
+            const aR = (hero.legRight.angle ?? 0);
+            const lx = legTopL.x + Math.sin(deg2rad(aL)) * len;
+            const ly = legTopL.y + Math.cos(deg2rad(aL)) * len;
+            const rx = legTopR.x + Math.sin(deg2rad(aR)) * len;
+            const ry = legTopR.y + Math.cos(deg2rad(aR)) * len;
+            hero.footLeft.pos = k.vec2(lx, ly);
+            hero.footRight.pos = k.vec2(rx, ry);
+            hero.footLeft.angle = aL;
+            hero.footRight.angle = aR;
+          });
+          const platformZ = 4.5;
+          const ledgeWidth = Math.min(viewW * 0.72, 420);
+          const ledgeHeight = Math.max(30, Math.floor(viewH * 0.08));
+          const ledgeY = platformTopY + ledgeHeight / 2;
+          const platform = k.add([k.rect(ledgeWidth, ledgeHeight, { radius: 10 }), k.pos(viewW / 2, ledgeY), k.anchor('center'), k.color(88, 72, 64), { z: platformZ }]);
+          const slab1 = k.add([k.rect(ledgeWidth * 0.75, ledgeHeight * 0.7, { radius: 10 }), k.pos(viewW / 2 - ledgeWidth * 0.12, ledgeY + ledgeHeight * 0.08), k.anchor('center'), k.color(74, 60, 54), { z: platformZ + 0.01 }]);
+          const slab2 = k.add([k.rect(ledgeWidth * 0.46, ledgeHeight * 0.5, { radius: 8 }), k.pos(viewW / 2 + ledgeWidth * 0.08, ledgeY + ledgeHeight * 0.25), k.anchor('center'), k.color(64, 50, 45), { z: platformZ + 0.02 }]);
+          const eyeCol = k.rgb(30, 30, 30);
+          const eyeSize = 3 * s;
+          const mouthW = 7 * s;
+          const mouthH = 2 * s;
+          hero.head.add([k.rect(eyeSize, eyeSize, { radius: 1 * s }), k.pos(-3 * s, -2 * s), k.anchor('center'), k.color(eyeCol), k.z(13.5)]);
+          hero.head.add([k.rect(eyeSize, eyeSize, { radius: 1 * s }), k.pos(3 * s, -2 * s), k.anchor('center'), k.color(eyeCol), k.z(13.5)]);
+          hero.head.add([k.rect(mouthW, mouthH, { radius: 1 * s }), k.pos(0, 4 * s), k.anchor('center'), k.color(60, 40, 40), k.z(13.6)]);
+          const titleStr = 'betaspray';
+          const baseY = viewH * 0.18;
+          const size = Math.round(64 * (GAME_CONFIG.uiScale ?? 1));
+          const letterSpacing = Math.round(size * 0.12);
+          const blue = k.rgb(28, 120, 200);
+          const letters = [];
+          function addOutlinedLetter(ch) {
+            const root = k.add([k.pos(0, 0), k.anchor('center'), k.z(2001)]);
+            const outlineOffsets = [[-2,0],[2,0],[0,-2],[0,2],[-2,-2],[2,-2],[-2,2],[2,2]];
+            for (const [ox, oy] of outlineOffsets) { root.add([k.text(ch, { size }), k.pos(ox, oy), k.anchor('center'), k.color(255, 255, 255)]); }
+            const main = root.add([k.text(ch, { size }), k.anchor('center'), k.color(blue)]);
+            return { root, main };
+          }
+          let totalWidth = 0;
+          const advances = [];
+          for (const ch of titleStr.split('')) {
+            const l = addOutlinedLetter(ch); letters.push(l);
+            const w = (l.main.width ?? size * 0.6);
+            const adv = w + letterSpacing; advances.push(adv); totalWidth += adv;
+          }
+          const startX = viewW / 2 - totalWidth / 2;
+          let x = startX;
+          for (let i = 0; i < letters.length; i++) {
+            const l = letters[i]; const adv = advances[i]; l.root.pos = k.vec2(x + adv / 2, baseY); x += adv;
+          }
+          k.onUpdate(() => { const t = k.time(); for (let i = 0; i < letters.length; i++) { const l = letters[i]; const dy = Math.sin(t * 3 + i * 0.5) * (size * 0.08); l.root.pos.y = baseY + dy; } });
+          const hintPanel = k.add([k.rect(viewW * 0.92, 66, { radius: 20 }), k.pos(viewW / 2, viewH - 36), k.anchor('center'), k.color(60, 50, 46), k.opacity(0.95), k.z(1999)]);
+          const hint = k.add([k.text('Tap Space/Enter to Start', { size: 28, width: viewW - 40, align: 'center' }), k.pos(viewW / 2, viewH - 40), k.anchor('center'), k.color(255, 255, 255), k.z(2000)]);
+          function playWithExitAnim() {
+            if (playWithExitAnim._running) return; playWithExitAnim._running = true;
+            isActing = true;
+            const rp = hero.root.pos;
+            const x0 = rp.x;
+            const x1 = wallCenterX;
+            const duration = 1.0;
+            k.tween(hero.body.angle ?? 0, 8, duration * 0.5, (v) => (hero.body.angle = v), easings.easeInOutSine);
+            k.tween(hero.armLeft.angle ?? 190, 210, duration * 0.5, (v) => (hero.armLeft.angle = v), easings.easeInOutSine);
+            k.tween(hero.armRight.angle ?? 170, 150, duration * 0.5, (v) => (hero.armRight.angle = v), easings.easeInOutSine);
+            const stepCycles = 2;
+            const half = duration / (stepCycles * 2);
+            const walkOne = (dir, onDone) => {
+              k.tween(hero.root.pos.x, hero.root.pos.x + dir * 6 * s, half, (v) => (hero.root.pos.x = v), easings.easeInOutSine).then?.(() => {
+                k.tween(hero.root.pos.x, hero.root.pos.x - dir * 6 * s, half, (v) => (hero.root.pos.x = v), easings.easeInOutSine).then?.(() => onDone?.());
+              });
+              k.tween(hero.legLeft.angle ?? 0, 10 * dir, half, (v) => (hero.legLeft.angle = v), easings.easeOutSine).then?.(() => {
+                k.tween(hero.legLeft.angle ?? 0, 0, half, (v) => (hero.legLeft.angle = v), easings.easeInSine);
+              });
+              k.tween(hero.legRight.angle ?? 0, -10 * dir, half, (v) => (hero.legRight.angle = v), easings.easeOutSine).then?.(() => {
+                k.tween(hero.legRight.angle ?? 0, 0, half, (v) => (hero.legRight.angle = v), easings.easeInSine);
+              });
+            };
+            k.tween(x0, x1, duration, (v) => (hero.root.pos.x = v), easings.easeInOutSine);
+            walkOne(1, () => walkOne(-1, () => { isActing = false; k.go('game', { autoStart: true }); }));
+          }
+          const start = () => playWithExitAnim();
+          ['space', 'enter', 'left', 'right', 'a', 'd'].forEach((key) => k.onKeyPress(key, start));
+          k.onClick(start);
+        });
+      }
+
+      // -------------------- main.ts --------------------
       const { k } = initKaboom();
       defineGameScene(k);
       defineMenuScene(k);
